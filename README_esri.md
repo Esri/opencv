@@ -6,8 +6,7 @@
 ```bash
 $ cd esri
 $ docker build --tag=opencv:4.7.0 - < opencv.dockerfile
-$ docker run --rm -it -u $(id -u):$(id -g) --volume ${HOME}/w/opencv:/opencv --workdir /opencv/esri opencv:4.7.0 bash
-$ bash build_opencv_linux.sh
+$ docker run --rm -it -u $(id -u):$(id -g) --volume ${HOME}/w/opencv:/opencv --workdir /opencv/esri opencv:4.7.0 bash build_opencv_linux.sh
 ```
 
 ## macos

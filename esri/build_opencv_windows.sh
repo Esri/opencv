@@ -16,6 +16,7 @@ function cmake_configure
     -DWITH_PROTOBUF=OFF \
     -DWITH_TIFF=OFF \
     -DWITH_WEBP=OFF \
+    -DBUILD_ZLIB=ON \
     -DBUILD_opencv_apps=OFF \
     -DBUILD_opencv_features2d=OFF \
     -DBUILD_opencv_flann=OFF \

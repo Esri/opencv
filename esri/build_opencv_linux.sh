@@ -15,6 +15,7 @@ cmake \
   -DCMAKE_SHARED_LINKER_FLAGS="-stdlib=libc++ -static-libstdc++ -fuse-ld=lld -rtlib=compiler-rt -ldl -pthread" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=../install \
+  -DENABLE_THIN_LTO=TRUE \
   -DOPENCV_PYTHON_SKIP_DETECTION=ON \
   -DWITH_FFMPEG=OFF \
   -DWITH_GTK=OFF \
@@ -57,4 +58,4 @@ cmake \
   -DBUILD_opencv_videoio=OFF \
   -DBUILD_opencv_world=OFF \
   ../..
-ninja install
+ninja -v install

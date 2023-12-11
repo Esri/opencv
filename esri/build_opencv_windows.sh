@@ -1,8 +1,11 @@
+OPENCV_VERSION=4.8.1
+
 function cmake_configure
 {
   cmake \
     -G "Visual Studio 17 2022" \
-    -T "version=14.33.31629" \
+    -T "version=14.37.32822" \
+    -DCMAKE_SYSTEM_VERSION=10.0.19041.0 \
     -DCMAKE_INSTALL_PREFIX=do_not_install_here \
     -DOPENCV_PYTHON_SKIP_DETECTION=ON \
     -DWITH_FFMPEG=OFF \
@@ -49,9 +52,15 @@ function cmake_configure
 
 set -ex
 
+rm -rf build
+
+mkdir build
+cd build
+
 rm -rf build_x64
 rm -rf install_x64
-cmake_configure -S opencv-4.7.0 -B build_x64 -A x64
+
+cmake_configure -S ../.. -B build_x64 -A x64
 cmake --build build_x64 --config Debug
 cmake --build build_x64 --config Release
 cmake --install build_x64 --config Debug --prefix install_x64
@@ -59,7 +68,7 @@ cmake --install build_x64 --config Release --prefix install_x64
 
 rm -rf build_x86
 rm -rf install_x86
-cmake_configure -S opencv-4.7.0 -B build_x86 \
+cmake_configure -S ../.. -B build_x86 \
     -A Win32 \
     -DCMAKE_SYSTEM_NAME=Windows \
     -DCMAKE_SYSTEM_VERSION=10.0 \
@@ -71,7 +80,7 @@ cmake --install build_x86 --config Release --prefix install_x86
 
 rm -rf build_arm64
 rm -rf install_arm64
-cmake_configure -S opencv-4.7.0 -B build_arm64 \
+cmake_configure -S ../.. -B build_arm64 \
     -A ARM64 \
     -DCMAKE_SYSTEM_NAME=Windows \
     -DCMAKE_SYSTEM_VERSION=10.0 \
@@ -81,4 +90,10 @@ cmake --build build_arm64 --config Release
 cmake --install build_arm64 --config Debug --prefix install_arm64
 cmake --install build_arm64 --config Release --prefix install_arm64
 
+cd ..
 
+rm -rf ${OPENCV_VERSION}
+mkdir ${OPENCV_VERSION}
+cp -r build/install_x64/* ${OPENCV_VERSION}
+cp -r build/install_x86/x86 ${OPENCV_VERSION}/x86
+cp -r build/install_arm64/ARM64 ${OPENCV_VERSION}/ARM64

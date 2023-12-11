@@ -6,15 +6,22 @@ rm -rf install
 
 mkdir build
 cd build
+
+OPENCV_VERSION=4.8.1
+export CC="/usr/local/rtc/llvm/17.0.1/bin/clang"
+export CXX="/usr/local/rtc/llvm/17.0.1/bin/clang++"
+PATH="/usr/local/rtc/cmake/3.27.6/bin:/usr/local/rtc/ninja/1.10.2/bin:$PATH"
+
 cmake \
   -GNinja \
-  -DCMAKE_C_COMPILER=/usr/local/rtc/llvm/11.0.0/bin/clang \
-  -DCMAKE_CXX_COMPILER=/usr/local/rtc/llvm/11.0.0/bin/clang++ \
-  -DCMAKE_C_FLAGS="-m64" \
-  -DCMAKE_CXX_FLAGS="-m64 -stdlib=libc++" \
+  -DCMAKE_SYSROOT=/usr/local/rtc/sysroot/redhat8.4/x86_64 \
+  -DCMAKE_C_COMPILER_TARGET=x86_64-unknown-linux-gnu \
+  -DCMAKE_CXX_COMPILER_TARGET=x86_64-unknown-linux-gnu \
+  -DCMAKE_C_FLAGS="-m64 -stdlib=libc++ -rtlib=compiler-rt" \
+  -DCMAKE_CXX_FLAGS="-m64 -stdlib=libc++ -rtlib=compiler-rt" \
   -DCMAKE_SHARED_LINKER_FLAGS="-stdlib=libc++ -static-libstdc++ -fuse-ld=lld -rtlib=compiler-rt -ldl -pthread" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX=../install \
+  -DCMAKE_INSTALL_PREFIX=../install/${OPENCV_VERSION}/x64 \
   -DENABLE_THIN_LTO=TRUE \
   -DOPENCV_PYTHON_SKIP_DETECTION=ON \
   -DWITH_FFMPEG=OFF \
@@ -59,3 +66,6 @@ cmake \
   -DBUILD_opencv_world=OFF \
   ../..
 ninja -v install
+
+cd ../install
+zip -r ../opencv-${OPENCV_VERSION}.zip ${OPENCV_VERSION}

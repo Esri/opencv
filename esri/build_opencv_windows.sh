@@ -54,7 +54,7 @@ set -ex
 
 rm -rf build_x64
 rm -rf install_x64
-cmake_configure -S opencv-4.7.0 -B build_x64 -A x64
+cmake_configure -S .. -B build_x64 -A x64
 cmake --build build_x64 --config Debug
 cmake --build build_x64 --config Release
 cmake --install build_x64 --config Debug --prefix install_x64
@@ -62,7 +62,7 @@ cmake --install build_x64 --config Release --prefix install_x64
 
 rm -rf build_x86
 rm -rf install_x86
-cmake_configure -S opencv-4.7.0 -B build_x86 \
+cmake_configure -S .. -B build_x86 \
     -A Win32 \
     -DCMAKE_SYSTEM_NAME=Windows \
     -DCMAKE_SYSTEM_VERSION=10.0 \
@@ -74,7 +74,7 @@ cmake --install build_x86 --config Release --prefix install_x86
 
 rm -rf build_arm64
 rm -rf install_arm64
-cmake_configure -S opencv-4.7.0 -B build_arm64 \
+cmake_configure -S .. -B build_arm64 \
     -A ARM64 \
     -DCMAKE_SYSTEM_NAME=Windows \
     -DCMAKE_SYSTEM_VERSION=10.0 \

@@ -1,4 +1,4 @@
-FROM harbor-west.esri.com/runtime-docker-public/ubuntu:16.04
+FROM harbor-west.esri.com/runtime-docker-public/ubuntu:20.04
 
 # This stops krb5-user package from prompting for geographic region
 ENV DEBIAN_FRONTEND=noninteractive
@@ -11,15 +11,22 @@ RUN \
   curl \
   cmake \
   ninja-build \
+  unzip \
   && \
   rm -rf /var/lib/apt/lists/* /tmp/* \
   && \
   echo "Done"
 
-# clang
-ENV clang_version="11.0.0"
+# LLVM
+ENV llvm_version="17.0.1"
 RUN \
-  curl --silent --insecure https://runtime-zip.esri.com/userContent/apps-archive/archive/local_system_setup/runtimecore/linux/${clang_version}_clang_libc++_x64.tar.gz | tar xzP \
+  mkdir -p /usr/local/rtc/llvm \
+  && \
+  curl --silent --insecure https://runtime-zip.esri.com/userContent/apps-archive/archive/local_system_setup/runtimecore/linux/llvm-${llvm_version}-x86_64.zip --output /tmp/llvm.zip \
+  && \
+  unzip /tmp/llvm.zip -d /usr/local/rtc/llvm \
+  && \
+  rm /tmp/llvm.zip \
   && \
   echo DONE
 

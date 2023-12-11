@@ -2,7 +2,7 @@ function cmake_configure
 {
   cmake \
     -G "Visual Studio 17 2022" \
-    -T "version=14.33.31629" \
+    -T "version=14.37.32822" \
     -DCMAKE_INSTALL_PREFIX=do_not_install_here \
     -DOPENCV_PYTHON_SKIP_DETECTION=ON \
     -DWITH_FFMPEG=OFF \

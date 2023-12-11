@@ -8,8 +8,8 @@ mkdir build
 cd build
 cmake \
   -GNinja \
-  -DCMAKE_C_COMPILER=/usr/local/rtc/llvm/11.0.0/bin/clang \
-  -DCMAKE_CXX_COMPILER=/usr/local/rtc/llvm/11.0.0/bin/clang++ \
+  -DCMAKE_C_COMPILER=/usr/local/rtc/llvm/17.0.1/bin/clang \
+  -DCMAKE_CXX_COMPILER=/usr/local/rtc/llvm/17.0.1/bin/clang++ \
   -DCMAKE_C_FLAGS="-m64" \
   -DCMAKE_CXX_FLAGS="-m64 -stdlib=libc++" \
   -DCMAKE_SHARED_LINKER_FLAGS="-stdlib=libc++ -static-libstdc++ -fuse-ld=lld -rtlib=compiler-rt -ldl -pthread" \

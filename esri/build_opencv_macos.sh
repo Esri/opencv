@@ -29,6 +29,9 @@ cmake -S .. -B build \
   -DWITH_PROTOBUF=OFF \
   -DWITH_TIFF=OFF \
   -DWITH_WEBP=OFF \
+  -DWITH_TBB=OFF \
+  -DWITH_OPENMP=OFF \
+  -DPARALLEL_ENABLE_PLUGINS=OFF \
   -DBUILD_ZLIB=ON \
   -DBUILD_opencv_apps=OFF \
   -DBUILD_opencv_features2d=OFF \

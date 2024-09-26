@@ -4,7 +4,7 @@
 Update the version of compilers, cmake, and ninja in the scripts.
 
 - OpenCV 4.8.1
-- llvm 17.0.1
+- llvm 19.1.0
 - CMake 3.27.6
 - Ninja 1.10.2
 - Xcode 14.3.1
@@ -33,4 +33,4 @@ $ cd esri
 $ bash build_opencv_windows.sh
 ```
 
-Zip the 4.8.1 directory to opencv-4.8.1.zip
+Zip the 4.8.1.1 directory to opencv-4.8.1.1.zip

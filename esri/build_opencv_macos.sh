@@ -4,7 +4,7 @@ set -ex
 rm -rf build
 rm -rf install
 
-OPENCV_VERSION=4.8.1
+OPENCV_VERSION=4.8.1.1
 export DEVELOPER_DIR="/Applications/Xcode_14.3.1.app/Contents/Developer"
 export CC="/usr/bin/clang"
 export CXX="/usr/bin/clang++"

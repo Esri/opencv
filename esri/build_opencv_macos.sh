@@ -1,14 +1,14 @@
-
+#!/usr/bin/env bash
 set -ex
 
 rm -rf build
 rm -rf install
 
-OPENCV_VERSION=4.8.1
-export DEVELOPER_DIR="/Applications/Xcode_14.3.1.app/Contents/Developer"
+OPENCV_VERSION=4.10.0
+export DEVELOPER_DIR="/Applications/Xcode_15.2.0.app/Contents/Developer"
 export CC="/usr/bin/clang"
 export CXX="/usr/bin/clang++"
-PATH="/usr/local/rtc/cmake/3.27.6/bin:/usr/local/rtc/ninja/1.10.2/bin:$PATH"
+PATH="/usr/local/rtc/cmake/3.29.2/bin:/usr/local/rtc/ninja/1.11.1/bin:$PATH"
 
 cmake -S .. -B build \
   -GNinja \

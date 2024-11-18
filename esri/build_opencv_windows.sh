@@ -1,10 +1,11 @@
-OPENCV_VERSION=4.8.1
+#!/usr/bin/env bash
+OPENCV_VERSION=4.10.0
 
 function cmake_configure
 {
   cmake \
     -G "Visual Studio 17 2022" \
-    -T "version=14.37.32822" \
+    -T "version=14.38.33130" \
     -DCMAKE_SYSTEM_VERSION=10.0.19041.0 \
     -DCMAKE_INSTALL_PREFIX=do_not_install_here \
     -DOPENCV_PYTHON_SKIP_DETECTION=ON \

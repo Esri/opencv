@@ -1,4 +1,4 @@
-
+#!/usr/bin/env bash
 set -ex
 
 rm -rf build
@@ -7,10 +7,10 @@ rm -rf install
 mkdir build
 cd build
 
-OPENCV_VERSION=4.8.1
-export CC="/usr/local/rtc/llvm/17.0.1/bin/clang"
-export CXX="/usr/local/rtc/llvm/17.0.1/bin/clang++"
-PATH="/usr/local/rtc/cmake/3.27.6/bin:/usr/local/rtc/ninja/1.10.2/bin:$PATH"
+OPENCV_VERSION=4.10.0
+export CC="/usr/local/rtc/llvm/19.1.2/bin/clang"
+export CXX="/usr/local/rtc/llvm/19.1.2/bin/clang++"
+PATH="/usr/local/rtc/cmake/3.29.2/bin:/usr/local/rtc/ninja/1.11.1/bin:$PATH"
 
 cmake \
   -GNinja \

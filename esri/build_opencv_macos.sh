@@ -3,6 +3,7 @@ set -ex
 
 rm -rf build
 rm -rf install
+rm -f opencv-*.zip
 
 OPENCV_VERSION=4.10.0
 export DEVELOPER_DIR="/Applications/Xcode_15.2.0.app/Contents/Developer"
@@ -16,6 +17,7 @@ cmake -S .. -B build \
   -DCMAKE_OSX_DEPLOYMENT_TARGET="12.0" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=install/${OPENCV_VERSION}  \
+  -DENABLE_THIN_LTO=TRUE \
   -DOPENCV_PYTHON_SKIP_DETECTION=ON \
   -DWITH_FFMPEG=OFF \
   -DWITH_GTK=OFF \

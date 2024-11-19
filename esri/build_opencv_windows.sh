@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 OPENCV_VERSION=4.10.0
+PATH="C:/rtc/cmake/3.29.2/bin:$PATH"
 
 function cmake_configure
 {
@@ -95,9 +96,11 @@ cmake --install build_arm64 --config Debug --prefix install_arm64
 cmake --install build_arm64 --config Release --prefix install_arm64
 
 cd ..
+rm -rf install/${OPENCV_VERSION}
+mkdir -p install/${OPENCV_VERSION}
+cd install
+cp -r ../build/install_x64/* ${OPENCV_VERSION}/
+cp -r ../build/install_x86/x86 ${OPENCV_VERSION}/x86
+cp -r ../build/install_arm64/ARM64 ${OPENCV_VERSION}/ARM64
 
-rm -rf ${OPENCV_VERSION}
-mkdir ${OPENCV_VERSION}
-cp -r build/install_x64/* ${OPENCV_VERSION}
-cp -r build/install_x86/x86 ${OPENCV_VERSION}/x86
-cp -r build/install_arm64/ARM64 ${OPENCV_VERSION}/ARM64
+powershell.exe Compress-Archive ${OPENCV_VERSION} ../opencv-${OPENCV_VERSION}.zip

@@ -1,0 +1,4 @@
+build
+build_*
+install
+opencv-*.zip

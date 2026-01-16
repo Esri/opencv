@@ -25,11 +25,9 @@ void initDLDTDataPath()
     static bool initialized = false;
     if (!initialized)
     {
-        const char* omzDataPath = getenv("OPENCV_OPEN_MODEL_ZOO_DATA_PATH");
-        if (omzDataPath)
-            cvtest::addDataSearchPath(omzDataPath);
-        const char* dnnDataPath = getenv("OPENCV_DNN_TEST_DATA_PATH");
-        if (dnnDataPath) {
+        cvtest::addDataSearchEnv("OPENCV_OPEN_MODEL_ZOO_DATA_PATH");
+        const std::string dnnDataPath = cv::utils::getConfigurationParameterString("OPENCV_DNN_TEST_DATA_PATH");
+        if (!dnnDataPath.empty()) {
             // Add the dnnDataPath itself - G-API is using some images there directly
             cvtest::addDataSearchPath(dnnDataPath);
             cvtest::addDataSearchPath(dnnDataPath + std::string("/omz_intel_models"));
@@ -831,7 +829,7 @@ static ov::element::Type toOV(int depth) {
     case CV_16F: return ov::element::f16;
     default: GAPI_Error("OV Backend: Unsupported data type");
     }
-    return ov::element::undefined;
+    return ov::element::dynamic;
 }
 
 struct TestMeanScaleOV : public ::testing::TestWithParam<int>{

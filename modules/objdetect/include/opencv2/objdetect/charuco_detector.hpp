@@ -16,6 +16,7 @@ struct CV_EXPORTS_W_SIMPLE CharucoParameters {
     CV_WRAP CharucoParameters() {
         minMarkers = 2;
         tryRefineMarkers = false;
+        checkMarkers = true;
     }
     /// cameraMatrix optional 3x3 floating-point camera matrix
     CV_PROP_RW Mat cameraMatrix;
@@ -28,6 +29,9 @@ struct CV_EXPORTS_W_SIMPLE CharucoParameters {
 
     /// try to use refine board, default false
     CV_PROP_RW bool tryRefineMarkers;
+
+    /// run check to verify that markers belong to the same board, default true
+    CV_PROP_RW bool checkMarkers;
 };
 
 class CV_EXPORTS_W CharucoDetector : public Algorithm {
@@ -58,7 +62,7 @@ public:
 
     /**
      * @brief detect aruco markers and interpolate position of ChArUco board corners
-     * @param image input image necesary for corner refinement. Note that markers are not detected and
+     * @param image input image necessary for corner refinement. Note that markers are not detected and
      * should be sent in corners and ids parameters.
      * @param charucoCorners interpolated chessboard corners.
      * @param charucoIds interpolated chessboard corners identifiers.

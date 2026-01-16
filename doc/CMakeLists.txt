@@ -1,8 +1,3 @@
-if (NOT CMAKE_CROSSCOMPILING)
-  file(RELATIVE_PATH __loc_relative "${OpenCV_BINARY_DIR}" "${CMAKE_CURRENT_LIST_DIR}/pattern_tools\n")
-  file(APPEND "${OpenCV_BINARY_DIR}/opencv_apps_python_tests.cfg" "${__loc_relative}")
-endif()
-
 if(NOT BUILD_DOCS)
   return()
 endif()
@@ -16,8 +11,8 @@ endif()
 
 find_package(Doxygen)
 if(DOXYGEN_FOUND)
-  if (DOXYGEN_VERSION VERSION_LESS 1.9.8)
-    message(WARNING "Found doxygen ${DOXYGEN_VERSION}, version 1.9.8 is used for testing, there is "
+  if (DOXYGEN_VERSION VERSION_LESS 1.12)
+    message(WARNING "Found doxygen ${DOXYGEN_VERSION}, version 1.12 is used for testing, there is "
                     "a chance your documentation will look different or have some limitations.")
   endif()
   add_custom_target(doxygen)
@@ -190,6 +185,7 @@ if(DOXYGEN_FOUND)
   list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/opencv.ico")
   list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/pattern.png")
   list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/acircles_pattern.png")
+  list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/charuco_board_pattern.png")
   list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/bodybg.png")
   # list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/mymath.sty")
   list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/tutorial-utils.js")

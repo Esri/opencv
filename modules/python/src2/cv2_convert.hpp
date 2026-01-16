@@ -182,6 +182,29 @@ struct PyOpenCV_Converter
     }
 };
 
+// There is conflict between "long long" and "int64".
+// They are the same type on some 32-bit platforms.
+template<typename T>
+struct PyOpenCV_Converter
+    < T, typename std::enable_if< std::is_same<long long, T>::value && !std::is_same<long long, int64>::value >::type >
+{
+    static inline PyObject* from(const long long& value)
+    {
+        return PyLong_FromLongLong(value);
+    }
+
+    static inline bool to(PyObject* obj, long long& value, const ArgInfo& info)
+    {
+        CV_UNUSED(info);
+        if(!obj || obj == Py_None)
+            return true;
+        else if(PyLong_Check(obj))
+            value = PyLong_AsLongLong(obj);
+        else
+            return false;
+        return value != (long long)-1 || !PyErr_Occurred();
+    }
+};
 
 // --- uchar
 template<> bool pyopencv_to(PyObject* obj, uchar& value, const ArgInfo& info);
@@ -340,20 +363,36 @@ static bool pyopencv_to_generic_vec(PyObject* obj, std::vector<Tp>& value, const
     {
         return true;
     }
-    if (!PySequence_Check(obj))
+    if (info.nd_mat && PyArray_Check(obj))
     {
-        failmsg("Can't parse '%s'. Input argument doesn't provide sequence protocol", info.name);
-        return false;
-    }
-    const size_t n = static_cast<size_t>(PySequence_Size(obj));
-    value.resize(n);
-    for (size_t i = 0; i < n; i++)
-    {
-        SafeSeqItem item_wrap(obj, i);
-        if (!pyopencv_to(item_wrap.item, value[i], info))
+        /*
+            If obj is marked as nd mat and of array type, it is parsed to a single
+            mat in the target vector to avoid being split into multiple mats
+        */
+        value.resize(1);
+        if (!pyopencv_to(obj, value.front(), info))
         {
-            failmsg("Can't parse '%s'. Sequence item with index %lu has a wrong type", info.name, i);
+            failmsg("Can't parse '%s'. Array item has a wrong type", info.name);
             return false;
+        }
+    }
+    else // parse as sequence
+    {
+        if (!PySequence_Check(obj))
+        {
+            failmsg("Can't parse '%s'. Input argument doesn't provide sequence protocol", info.name);
+            return false;
+        }
+        const size_t n = static_cast<size_t>(PySequence_Size(obj));
+        value.resize(n);
+        for (size_t i = 0; i < n; i++)
+        {
+            SafeSeqItem item_wrap(obj, i);
+            if (!pyopencv_to(item_wrap.item, value[i], info))
+            {
+                failmsg("Can't parse '%s'. Sequence item with index %lu has a wrong type", info.name, i);
+                return false;
+            }
         }
     }
     return true;

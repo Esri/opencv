@@ -98,10 +98,12 @@ class Builder:
                "-DWITH_GTK=OFF",
                "-DWITH_GTK_2_X=OFF",
                "-DWITH_IPP=OFF",
+               "-DWITH_AVIF=OFF",
                "-DWITH_JASPER=OFF",
                "-DWITH_JPEG=OFF",
                "-DWITH_WEBP=OFF",
                "-DWITH_OPENEXR=OFF",
+               "-DWITH_OPENJPEG=OFF",
                "-DWITH_OPENGL=OFF",
                "-DWITH_OPENVX=OFF",
                "-DWITH_OPENNI=OFF",
@@ -173,6 +175,10 @@ class Builder:
         if flags:
             cmd += ["-DCMAKE_C_FLAGS='%s'" % flags,
                     "-DCMAKE_CXX_FLAGS='%s'" % flags]
+
+        if self.options.extra_modules:
+            cmd.append("-DOPENCV_EXTRA_MODULES_PATH='%s'" % self.options.extra_modules)
+
         return cmd
 
     def get_build_flags(self):
@@ -192,7 +198,7 @@ class Builder:
         if self.options.simd:
             flags += "-msimd128 "
         if self.options.build_flags:
-            flags += self.options.build_flags
+            flags += self.options.build_flags + " "
         if self.options.webnn:
             flags += "-s USE_WEBNN=1 "
         flags += "-s EXPORTED_FUNCTIONS=\"['_malloc', '_free']\""
@@ -254,18 +260,20 @@ if __name__ == "__main__":
     parser.add_argument('--cmake_option', action='append', help="Append CMake options")
     # Use flag --build_flags="-s USE_PTHREADS=0 -Os" for one and more arguments as in the example
     parser.add_argument('--build_flags', help="Append Emscripten build options")
-    parser.add_argument('--build_wasm_intrin_test', default=False, action="store_true", help="Build WASM intrin tests")
+    parser.add_argument('--build_wasm_intrin_test', action="store_true", help="Build WASM intrin tests")
     # Write a path to modify file like argument of this flag
-    parser.add_argument('--config', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'opencv_js.config.py'),
-                        help="Specify configuration file with own list of exported into JS functions")
+    parser.add_argument('--config', help="Specify configuration file with own list of exported into JS functions")
     parser.add_argument('--webnn', action="store_true", help="Enable WebNN Backend")
+    parser.add_argument("--extra_modules", required=False, help="Path extra modules location (OPENCV_EXTRA_MODULES_PATH)")
 
-    transformed_args = ["--cmake_option=%s".format(arg) if arg[:2] == "-D" else arg for arg in sys.argv[1:]]
+
+    transformed_args = ["--cmake_option={}".format(arg) if arg[:2] == "-D" else arg for arg in sys.argv[1:]]
     args = parser.parse_args(transformed_args)
 
     log.debug("Args: %s", args)
 
-    os.environ["OPENCV_JS_WHITELIST"] = os.path.abspath(args.config)
+    if args.config is not None:
+        os.environ["OPENCV_JS_WHITELIST"] = os.path.abspath(args.config)
 
     if 'EMMAKEN_JUST_CONFIGURE' in os.environ:
         del os.environ['EMMAKEN_JUST_CONFIGURE']  # avoid linker errors with NODERAWFS message then using 'emcmake' launcher

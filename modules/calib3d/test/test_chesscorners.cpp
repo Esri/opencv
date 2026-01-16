@@ -679,6 +679,26 @@ TEST(Calib3d_AsymmetricCirclesPatternDetector, accuracy) { CV_ChessboardDetector
 TEST(Calib3d_AsymmetricCirclesPatternDetectorWithClustering, accuracy) { CV_ChessboardDetectorTest test( ASYMMETRIC_CIRCLES_GRID, CALIB_CB_CLUSTERING ); test.safe_run(); }
 #endif
 
+TEST(Calib3d_ChessboardWithMarkers, regression_25806_white)
+{
+    const cv::String dataDir = string(TS::ptr()->get_data_path()) + "cv/cameracalibration/";
+    const cv::Mat image = cv::imread(dataDir + "checkerboard_marker_white.png");
+
+    std::vector<Point2f> corners;
+    const bool success = cv::findChessboardCornersSB(image, Size(9, 14), corners, CALIB_CB_MARKER);
+    ASSERT_TRUE(success);
+}
+
+TEST(Calib3d_ChessboardWithMarkers, regression_25806_black)
+{
+    const cv::String dataDir = string(TS::ptr()->get_data_path()) + "cv/cameracalibration/";
+    const cv::Mat image = cv::imread(dataDir + "checkerboard_marker_black.png");
+
+    std::vector<Point2f> corners;
+    const bool success = cv::findChessboardCornersSB(image, Size(9, 14), corners, CALIB_CB_MARKER);
+    ASSERT_TRUE(success);
+}
+
 TEST(Calib3d_CirclesPatternDetectorWithClustering, accuracy)
 {
     cv::String dataDir = string(TS::ptr()->get_data_path()) + "cv/cameracalibration/circles/";
@@ -827,6 +847,19 @@ TEST(Calib3d_RotatedCirclesPatternDetector, issue_24964)
     EXPECT_TRUE(found);
     ASSERT_EQ(centers.size(), (size_t)parrernSize.area());
     EXPECT_LE(error, precise_success_error_level);
+}
+
+TEST(Calib3d_CornerOrdering, issue_26830) {
+    const cv::String dataDir = string(TS::ptr()->get_data_path()) + "cv/cameracalibration/";
+    const cv::Mat image = cv::imread(dataDir + "checkerboard_marker_white.png");
+
+    std::vector<Point2f> cornersMinimumSizeMatchesPatternSize;
+    ASSERT_TRUE(cv::findChessboardCornersSB(image, Size(14, 9), cornersMinimumSizeMatchesPatternSize, CALIB_CB_MARKER | CALIB_CB_LARGER));
+
+    std::vector<Point2f> cornersMinimumSizeSmallerThanPatternSize;
+    ASSERT_TRUE(cv::findChessboardCornersSB(image, Size(4, 4), cornersMinimumSizeSmallerThanPatternSize, CALIB_CB_MARKER | CALIB_CB_LARGER));
+
+    ASSERT_EQ(cornersMinimumSizeMatchesPatternSize, cornersMinimumSizeSmallerThanPatternSize);
 }
 
 }} // namespace

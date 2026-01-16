@@ -39,6 +39,7 @@
 //
 //M*/
 #include "precomp.hpp"
+#include <queue>
 
 /****************************************************************************************\
 *                                  Chain Approximation                                   *
@@ -585,26 +586,40 @@ approxPolyDP_( const Point_<T>* src_contour, int count0, Point_<T>* dst_contour,
 
         if( pos != slice.end )
         {
-            double dx, dy, dist, max_dist = 0;
+            double dx, dy, max_dist_2_mul_segment_len_2 = 0;
 
             dx = end_pt.x - start_pt.x;
             dy = end_pt.y - start_pt.y;
+            double segment_len_2 = dx * dx + dy * dy;
 
             CV_Assert( dx != 0 || dy != 0 );
 
             while( pos != slice.end )
             {
                 READ_PT(pt, pos);
-                dist = fabs((pt.y - start_pt.y) * dx - (pt.x - start_pt.x) * dy);
+                double projection = ((pt.x - start_pt.x) * dx + (pt.y - start_pt.y) * dy);
 
-                if( dist > max_dist )
+                double dist_2_mul_segment_len_2;
+                if ( projection < 0 )
                 {
-                    max_dist = dist;
+                    dist_2_mul_segment_len_2 = ((pt.x - start_pt.x) * (pt.x - start_pt.x) + (pt.y - start_pt.y) * (pt.y - start_pt.y)) * segment_len_2;
+                } else if ( projection > segment_len_2 )
+                {
+                    dist_2_mul_segment_len_2 = ((pt.x - end_pt.x) * (pt.x - end_pt.x) + (pt.y - end_pt.y) * (pt.y - end_pt.y)) * segment_len_2;
+                } else
+                {
+                    double dist = ((pt.y - start_pt.y) * dx - (pt.x - start_pt.x) * dy);
+                    dist_2_mul_segment_len_2 = dist * dist;
+                }
+
+                if( dist_2_mul_segment_len_2 > max_dist_2_mul_segment_len_2 )
+                {
+                    max_dist_2_mul_segment_len_2 = dist_2_mul_segment_len_2;
                     right_slice.start = (pos+count-1)%count;
                 }
             }
 
-            le_eps = max_dist * max_dist <= eps * (dx * dx + dy * dy);
+            le_eps = max_dist_2_mul_segment_len_2 <= eps * segment_len_2;
         }
         else
         {
@@ -778,16 +793,13 @@ cvApproxPoly( const void* array, int header_size,
     {
         CvSeq *contour = 0;
 
-        switch (method)
+        if( parameter < 0 )
+            CV_Error( cv::Error::StsOutOfRange, "Accuracy must be non-negative" );
+
+        CV_Assert( CV_SEQ_ELTYPE(src_seq) == CV_32SC2 ||
+                    CV_SEQ_ELTYPE(src_seq) == CV_32FC2 );
+
         {
-        case CV_POLY_APPROX_DP:
-            if( parameter < 0 )
-                CV_Error( cv::Error::StsOutOfRange, "Accuracy must be non-negative" );
-
-            CV_Assert( CV_SEQ_ELTYPE(src_seq) == CV_32SC2 ||
-                      CV_SEQ_ELTYPE(src_seq) == CV_32FC2 );
-
-            {
             int npoints = src_seq->total, nout = 0;
             _buf.allocate(npoints*2);
             cv::Point *src = _buf.data(), *dst = src + npoints;
@@ -802,17 +814,13 @@ cvApproxPoly( const void* array, int header_size,
                 nout = cv::approxPolyDP_(src, npoints, dst, closed, parameter, stack);
             else if( CV_SEQ_ELTYPE(src_seq) == CV_32FC2 )
                 nout = cv::approxPolyDP_((cv::Point2f*)src, npoints,
-                                         (cv::Point2f*)dst, closed, parameter, stack);
+                                            (cv::Point2f*)dst, closed, parameter, stack);
             else
                 CV_Error( cv::Error::StsUnsupportedFormat, "" );
 
             contour = cvCreateSeq( src_seq->flags, header_size,
-                                  src_seq->elem_size, storage );
+                                    src_seq->elem_size, storage );
             cvSeqPushMulti(contour, dst, nout);
-            }
-            break;
-        default:
-            CV_Error( cv::Error::StsBadArg, "Invalid approximation method" );
         }
 
         CV_Assert( contour );
@@ -858,6 +866,242 @@ cvApproxPoly( const void* array, int header_size,
     }
 
     return dst_seq;
+}
+
+enum class PointStatus : int8_t
+{
+    REMOVED = -1,
+    RECALCULATE = 0,
+    CALCULATED = 1
+};
+
+struct neighbours
+{
+    PointStatus pointStatus;
+    cv::Point2f point;
+    int next;
+    int prev;
+
+    explicit neighbours(int next_ = -1, int prev_ = -1, const cv::Point2f& point_ = { -1, -1 })
+    {
+        next = next_;
+        prev = prev_;
+        point = point_;
+        pointStatus = PointStatus::CALCULATED;
+    }
+};
+
+struct changes
+{
+    float area;
+    int vertex;
+    cv::Point2f intersection;
+
+    explicit changes(float area_, int vertex_, const cv::Point2f& intersection_)
+    {
+        area = area_;
+        vertex = vertex_;
+        intersection = intersection_;
+    }
+
+    bool operator < (const changes& elem) const
+    {
+        return (area < elem.area) || ((area == elem.area) && (vertex < elem.vertex));
+    }
+    bool operator > (const changes& elem) const
+    {
+        return (area > elem.area) || ((area == elem.area) && (vertex > elem.vertex));
+    }
+};
+
+/*
+  returns intersection point and extra area
+*/
+static void recalculation(std::vector<neighbours>& hull, int vertex_id, float& area_, float& x, float& y)
+{
+    cv::Point2f vertex = hull[vertex_id].point,
+        next_vertex = hull[hull[vertex_id].next].point,
+        extra_vertex_1 = hull[hull[vertex_id].prev].point,
+        extra_vertex_2 = hull[hull[hull[vertex_id].next].next].point;
+
+    cv::Point2f curr_edge = next_vertex - vertex,
+        prev_edge = vertex - extra_vertex_1,
+        next_edge = extra_vertex_2 - next_vertex;
+
+    float cross = prev_edge.x * next_edge.y - prev_edge.y * next_edge.x;
+    if (abs(cross) < 1e-8)
+    {
+        area_ = FLT_MAX;
+        x = -1;
+        y = -1;
+        return;
+    }
+
+    float t = (curr_edge.x * next_edge.y - curr_edge.y * next_edge.x) / cross;
+    cv::Point2f intersection = vertex + cv::Point2f(prev_edge.x * t, prev_edge.y * t);
+
+    float area = 0.5f * abs((next_vertex.x - vertex.x) * (intersection.y - vertex.y)
+        - (intersection.x - vertex.x) * (next_vertex.y - vertex.y));
+
+    area_ = area;
+    x = intersection.x;
+    y = intersection.y;
+}
+
+static void update(std::vector<neighbours>& hull, int vertex_id)
+{
+    neighbours& v1 = hull[vertex_id], & removed = hull[v1.next], & v2 = hull[removed.next];
+
+    removed.pointStatus = PointStatus::REMOVED;
+    v1.pointStatus = PointStatus::RECALCULATE;
+    v2.pointStatus = PointStatus::RECALCULATE;
+    hull[v1.prev].pointStatus = PointStatus::RECALCULATE;
+    v1.next = removed.next;
+    v2.prev = removed.prev;
+}
+
+/*
+    A greedy algorithm based on contraction of vertices for approximating a convex contour by a bounding polygon
+*/
+void cv::approxPolyN(InputArray _curve, OutputArray _approxCurve,
+    int nsides, float epsilon_percentage, bool ensure_convex)
+{
+    CV_INSTRUMENT_REGION();
+
+    CV_Assert(epsilon_percentage > 0 || epsilon_percentage == -1);
+    CV_Assert(nsides > 2);
+
+    if (_approxCurve.fixedType())
+    {
+        CV_Assert(_approxCurve.type() == CV_32FC2 || _approxCurve.type() == CV_32SC2);
+    }
+
+    Mat curve;
+    int depth = _curve.depth();
+
+    CV_Assert(depth == CV_32F || depth == CV_32S);
+
+    if (ensure_convex)
+    {
+        cv::convexHull(_curve, curve);
+    }
+    else
+    {
+        CV_Assert(isContourConvex(_curve));
+        curve = _curve.getMat();
+    }
+
+    CV_Assert((curve.cols == 1 && curve.rows >= nsides)
+        || (curve.rows == 1 && curve.cols >= nsides));
+
+    if (curve.rows == 1)
+    {
+        curve = curve.reshape(0, curve.cols);
+    }
+
+    std::vector<neighbours> hull(curve.rows);
+    int size = curve.rows;
+    std::priority_queue<changes, std::vector<changes>, std::greater<changes>> areas;
+    float extra_area = 0, max_extra_area = epsilon_percentage * static_cast<float>(contourArea(_curve));
+
+    if (curve.depth() == CV_32S)
+    {
+        for (int i = 0; i < size; ++i)
+        {
+            Point t = curve.at<cv::Point>(i, 0);
+            hull[i] = neighbours(i + 1, i - 1, Point2f(static_cast<float>(t.x), static_cast<float>(t.y)));
+        }
+    }
+    else
+    {
+        for (int i = 0; i < size; ++i)
+        {
+            Point2f t = curve.at<cv::Point2f>(i, 0);
+            hull[i] = neighbours(i + 1, i - 1, t);
+        }
+    }
+    hull[0].prev = size - 1;
+    hull[size - 1].next = 0;
+
+    if (size > nsides)
+    {
+        for (int vertex_id = 0; vertex_id < size; ++vertex_id)
+        {
+            float area, new_x, new_y;
+            recalculation(hull, vertex_id, area, new_x, new_y);
+
+            areas.push(changes(area, vertex_id, Point2f(new_x, new_y)));
+        }
+    }
+
+    while (size > nsides)
+    {
+        changes base = areas.top();
+        int vertex_id = base.vertex;
+
+        if (hull[vertex_id].pointStatus == PointStatus::REMOVED)
+        {
+            areas.pop();
+        }
+        else if (hull[vertex_id].pointStatus == PointStatus::RECALCULATE)
+        {
+            float area, new_x, new_y;
+            areas.pop();
+            recalculation(hull, vertex_id, area, new_x, new_y);
+
+            areas.push(changes(area, vertex_id, Point2f(new_x, new_y)));
+            hull[vertex_id].pointStatus = PointStatus::CALCULATED;
+        }
+        else
+        {
+            if (epsilon_percentage != -1)
+            {
+                extra_area += base.area;
+                if (extra_area > max_extra_area)
+                {
+                    break;
+                }
+            }
+
+            size--;
+            hull[vertex_id].point = base.intersection;
+            update(hull, vertex_id);
+        }
+    }
+
+    if (_approxCurve.fixedType())
+    {
+        depth = _approxCurve.depth();
+    }
+    _approxCurve.create(1, size, CV_MAKETYPE(depth, 2));
+    Mat buf = _approxCurve.getMat();
+    int last_free = 0;
+
+    if (depth == CV_32S)
+    {
+        for (int i = 0; i < curve.rows; ++i)
+        {
+            if (hull[i].pointStatus != PointStatus::REMOVED)
+            {
+                Point t = Point(static_cast<int>(round(hull[i].point.x)),
+                                static_cast<int>(round(hull[i].point.y)));
+
+                buf.at<Point>(0, last_free) = t;
+                last_free++;
+            }
+        }
+    }
+    else
+    {
+        for (int i = 0; i < curve.rows; ++i)
+        {
+            if (hull[i].pointStatus != PointStatus::REMOVED)
+            {
+                buf.at<Point2f>(0, last_free) = hull[i].point;
+                last_free++;
+            }
+        }
+    }
 }
 
 /* End of file. */

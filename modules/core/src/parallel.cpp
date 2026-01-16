@@ -72,6 +72,10 @@
     #endif
 #endif
 
+#if defined (__QNX__)
+    #include <sys/syspage.h>
+#endif
+
 #ifndef OPENCV_DISABLE_THREAD_SUPPORT
     #include <thread>
 #endif
@@ -461,10 +465,6 @@ namespace {
 static inline int _initMaxThreads()
 {
     int maxThreads = omp_get_max_threads();
-    if (!utils::getConfigurationParameterBool("OPENCV_FOR_OPENMP_DYNAMIC_DISABLE", false))
-    {
-        omp_set_dynamic(1);
-    }
     return maxThreads;
 }
 static int numThreadsMax = _initMaxThreads();
@@ -943,7 +943,7 @@ int getNumberOfCPUs_()
 #if defined _WIN32
 
     SYSTEM_INFO sysinfo = {};
-#if (defined(_M_ARM) || defined(_M_ARM64) || defined(_M_X64) || defined(WINRT)) && _WIN32_WINNT >= 0x501
+#if (defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC) || defined(_M_X64) || defined(WINRT)) && _WIN32_WINNT >= 0x501
     GetNativeSystemInfo( &sysinfo );
 #else
     GetSystemInfo( &sysinfo );
@@ -1011,7 +1011,9 @@ int getNumberOfCPUs_()
 
     static unsigned cpu_count_sysconf = (unsigned)sysconf( _SC_NPROCESSORS_ONLN );
     ncpus = minNonZero(ncpus, cpu_count_sysconf);
-
+#elif defined (__QNX__)
+    static unsigned cpu_count_sysconf = _syspage_ptr->num_cpu;
+    ncpus = minNonZero(ncpus, cpu_count_sysconf);
 #endif
 
     return ncpus != 0 ? ncpus : 1;

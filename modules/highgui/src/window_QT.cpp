@@ -854,14 +854,17 @@ GuiReceiver::GuiReceiver() : bTimeOut(false), nb_windows(0)
 
 void GuiReceiver::isLastWindow()
 {
-    if (--nb_windows <= 0)
+    if (qApp->quitOnLastWindowClosed())
     {
-        delete guiMainThread;//delete global_control_panel too
-        guiMainThread = NULL;
-
-        if (!doesExternalQAppExist)
+        if (--nb_windows <= 0)
         {
-            qApp->quit();
+            delete guiMainThread; // delete global_control_panel too
+            guiMainThread = NULL;
+
+            if (doesExternalQAppExist)
+            {
+                qApp->quit();
+            }
         }
     }
 }
@@ -1723,28 +1726,27 @@ CvWindow::CvWindow(QString name, int arg2)
         createStatusBar();
     }
 
+    myView->getWidget()->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
     //Now attach everything
     if (myToolBar)
-        myGlobalLayout->addWidget(myToolBar, 0, Qt::AlignLeft);
+        myGlobalLayout->addWidget(myToolBar);
 
-    myGlobalLayout->addWidget(myView->getWidget(), 0, Qt::AlignCenter);
+    myGlobalLayout->addWidget(myView->getWidget());
 
     myGlobalLayout->addLayout(myBarLayout);
 
     if (myStatusBar)
-        myGlobalLayout->addWidget(myStatusBar, 0, Qt::AlignLeft);
+        myGlobalLayout->addWidget(myStatusBar);
 
     setLayout(myGlobalLayout);
     show();
 }
 
-
 CvWindow::~CvWindow()
 {
-    if (guiMainThread)
-        guiMainThread->isLastWindow();
+    delete myView;
 }
-
 
 void CvWindow::setMouseCallBack(CvMouseCallback callback, void* param)
 {
@@ -2256,6 +2258,15 @@ void CvWindow::keyPressEvent(QKeyEvent *evnt)
     }
 
     QWidget::keyPressEvent(evnt);
+}
+
+
+void CvWindow::closeEvent(QCloseEvent* evnt)
+{
+    QWidget::closeEvent(evnt);
+
+    if (guiMainThread)
+        guiMainThread->isLastWindow();
 }
 
 
@@ -2949,6 +2960,7 @@ void DefaultViewPort::stopDisplayInfo()
 {
     timerDisplay->stop();
     drawInfo = false;
+    viewport()->update();
 }
 
 

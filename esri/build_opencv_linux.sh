@@ -5,10 +5,10 @@ rm -rf build_arm64 build_x64
 rm -rf install
 rm -f opencv-*.zip
 
-OPENCV_VERSION=4.10.0
+OPENCV_VERSION=4.13.0
 export CC="/usr/local/rtc/llvm/19.1.2/bin/clang"
 export CXX="/usr/local/rtc/llvm/19.1.2/bin/clang++"
-PATH="/usr/local/rtc/cmake/3.29.2/bin:/usr/local/rtc/ninja/1.11.1/bin:$PATH"
+PATH="/usr/local/rtc/cmake/4.2.1/bin:/usr/local/rtc/ninja/1.12.1/bin:$PATH"
 
 cmake -S .. -B build_arm64 \
   -GNinja \

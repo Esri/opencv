@@ -3,12 +3,12 @@
 
 Update the version of compilers, cmake, and ninja in the scripts.
 
-- OpenCV 4.10.0
+- OpenCV 4.13.0
 - llvm 19.1.2
-- CMake 3.29.2
-- Ninja 1.11.1
-- Xcode 15.2.0
-- Visual Studio toolchain version 14.38.33130
+- CMake 4.2.1
+- Ninja 1.12.1
+- Xcode 16.2.0
+- Visual Studio 2022 toolchain version 14.44.35207
 - Windows SDK 10.0.19041.0
 
 ## linux

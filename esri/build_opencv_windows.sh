@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-OPENCV_VERSION=4.10.0
-PATH="C:/rtc/cmake/3.29.2/bin:$PATH"
+OPENCV_VERSION=4.13.0
+PATH="/c/rtc/cmake/4.2.1/bin:${PATH}"
 
 function cmake_configure
 {
   cmake \
     -G "Visual Studio 17 2022" \
-    -T "version=14.38.33130" \
+    -T "version=14.44.35207" \
     -DCMAKE_SYSTEM_VERSION=10.0.19041.0 \
     -DCMAKE_INSTALL_PREFIX=do_not_install_here \
     -DOPENCV_PYTHON_SKIP_DETECTION=ON \
@@ -71,18 +71,6 @@ cmake --build build_x64 --config Release
 cmake --install build_x64 --config Debug --prefix install_x64
 cmake --install build_x64 --config Release --prefix install_x64
 
-rm -rf build_x86
-rm -rf install_x86
-cmake_configure -S ../.. -B build_x86 \
-    -A Win32 \
-    -DCMAKE_SYSTEM_NAME=Windows \
-    -DCMAKE_SYSTEM_VERSION=10.0 \
-    -DCMAKE_SYSTEM_PROCESSOR=x86
-cmake --build build_x86 --config Debug
-cmake --build build_x86 --config Release
-cmake --install build_x86 --config Debug --prefix install_x86
-cmake --install build_x86 --config Release --prefix install_x86
-
 rm -rf build_arm64
 rm -rf install_arm64
 cmake_configure -S ../.. -B build_arm64 \
@@ -100,7 +88,6 @@ rm -rf install/${OPENCV_VERSION}
 mkdir -p install/${OPENCV_VERSION}
 cd install
 cp -r ../build/install_x64/* ${OPENCV_VERSION}/
-cp -r ../build/install_x86/x86 ${OPENCV_VERSION}/x86
 cp -r ../build/install_arm64/ARM64 ${OPENCV_VERSION}/ARM64
 
 powershell.exe Compress-Archive ${OPENCV_VERSION} ../opencv-${OPENCV_VERSION}.zip

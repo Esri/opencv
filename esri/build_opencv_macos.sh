@@ -5,16 +5,16 @@ rm -rf build
 rm -rf install
 rm -f opencv-*.zip
 
-OPENCV_VERSION=4.10.0
-export DEVELOPER_DIR="/Applications/Xcode_15.2.0.app/Contents/Developer"
+OPENCV_VERSION=4.13.0
+export DEVELOPER_DIR="/Applications/Xcode_16.2.0.app/Contents/Developer"
 export CC="/usr/bin/clang"
 export CXX="/usr/bin/clang++"
-PATH="/usr/local/rtc/cmake/3.29.2/bin:/usr/local/rtc/ninja/1.11.1/bin:$PATH"
+PATH="/usr/local/rtc/cmake/4.2.1/bin:/usr/local/rtc/ninja/1.12.1/bin:$PATH"
 
 cmake -S .. -B build \
   -GNinja \
   -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET="12.0" \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET="14.0" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=install/${OPENCV_VERSION}  \
   -DENABLE_THIN_LTO=TRUE \

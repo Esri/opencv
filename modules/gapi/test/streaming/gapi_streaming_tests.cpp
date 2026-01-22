@@ -316,7 +316,7 @@ public:
 
     static std::string exception_msg()
     {
-        return "InvalidSource sucessfuly failed!";
+        return "InvalidSource successfully failed!";
     }
 
     bool pull(cv::gapi::wip::Data& d) override {
@@ -327,7 +327,6 @@ public:
 
         if (m_curr_frame_id % m_throw_every_nth_frame == 0) {
             throw std::logic_error(InvalidSource::exception_msg());
-            return true;
         } else {
             d = cv::Mat(m_mat);
         }
@@ -355,7 +354,7 @@ GAPI_OCV_KERNEL(GThrowExceptionKernel, GThrowExceptionOp)
 {
     static std::string exception_msg()
     {
-        return "GThrowExceptionKernel sucessfuly failed";
+        return "GThrowExceptionKernel successfully failed";
     }
 
     static void run(const cv::Mat&, cv::Mat&)

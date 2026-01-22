@@ -315,7 +315,7 @@ void finalizeHdr(Mat& m)
         m.rows = m.cols = -1;
     if(m.u)
         m.datastart = m.data = m.u->data;
-    if( m.data )
+    if( m.data && d > 0 )
     {
         m.datalimit = m.datastart + m.size[0]*m.step[0];
         if( m.size[0] > 0 )
@@ -328,7 +328,7 @@ void finalizeHdr(Mat& m)
             m.dataend = m.datalimit;
     }
     else
-        m.dataend = m.datalimit = 0;
+        m.dataend = m.datalimit = m.data;
 }
 
 //======================================= Mat ======================================================
@@ -595,7 +595,7 @@ size_t Mat::total(int startDim, int endDim) const
 }
 
 
-Mat::Mat(Mat&& m)
+Mat::Mat(Mat&& m) CV_NOEXCEPT
     : flags(m.flags), dims(m.dims), rows(m.rows), cols(m.cols), data(m.data),
       datastart(m.datastart), dataend(m.dataend), datalimit(m.datalimit), allocator(m.allocator),
       u(m.u), size(&rows)
@@ -692,16 +692,13 @@ void Mat::create(int d, const int* _sizes, int _type)
     if( total() > 0 )
     {
         MatAllocator *a = allocator, *a0 = getDefaultAllocator();
-#ifdef HAVE_TGPU
-        if( !a || a == tegra::getAllocator() )
-            a = tegra::getAllocator(d, _sizes, _type);
-#endif
         if(!a)
             a = a0;
         try
         {
             u = a->allocate(dims, size, _type, 0, step.p, ACCESS_RW /* ignored */, USAGE_DEFAULT);
             CV_Assert(u != 0);
+            allocator = a;
         }
         catch (...)
         {
@@ -709,6 +706,7 @@ void Mat::create(int d, const int* _sizes, int _type)
                 throw;
             u = a0->allocate(dims, size, _type, 0, step.p, ACCESS_RW /* ignored */, USAGE_DEFAULT);
             CV_Assert(u != 0);
+            allocator = a0;
         }
         CV_Assert( step[dims-1] == (size_t)CV_ELEM_SIZE(flags) );
     }
@@ -1259,6 +1257,16 @@ Mat Mat::reshape(int _cn, const std::vector<int>& _newshape) const
     }
 
     return reshape(_cn, (int)_newshape.size(), &_newshape[0]);
+}
+
+Mat Mat::reinterpret(int type) const
+{
+    type = CV_MAT_TYPE(type);
+    CV_Assert(CV_ELEM_SIZE(this->type()) == CV_ELEM_SIZE(type));
+    Mat m = *this;
+    m.flags = (m.flags & ~CV_MAT_TYPE_MASK) | type;
+    m.updateContinuityFlag();
+    return m;
 }
 
 Mat Mat::diag(const Mat& d)

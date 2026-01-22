@@ -262,7 +262,7 @@ int CV_DrawingTest_CPP::checkLineVirtualIterator(  )
         int x3 = randomGenerator.uniform(-512, 1024+1);
         int y3 = randomGenerator.uniform(-512, 1024+1);
         int channels = randomGenerator.uniform(1, 3+1);
-        Mat m(cv::Size(width, height), CV_MAKETYPE(8U, channels));
+        Mat m(cv::Size(width, height), CV_MAKETYPE(CV_8U, channels));
         Point p1(x1, y1);
         Point p2(x2, y2);
         Point offset(x3, y3);
@@ -589,7 +589,7 @@ TEST(Drawing, longline)
     Mat mat = Mat::zeros(256, 256, CV_8UC1);
 
     line(mat, cv::Point(34, 204), cv::Point(46400, 47400), cv::Scalar(255), 3);
-    EXPECT_EQ(310, cv::countNonZero(mat));
+    EXPECT_EQ(264, cv::countNonZero(mat));
 
     Point pt[6];
     pt[0].x = 32;
@@ -680,6 +680,75 @@ TEST(Drawing, fillpoly_circle)
     EXPECT_LT(diff_fp3, 1.);
 }
 
+TEST(Drawing, fillpoly_contours)
+{
+    const int imgSize = 50;
+    const int type = CV_8UC1;
+    const int shift = 0;
+    const Scalar cl = Scalar::all(255);
+    const cv::LineTypes lineType = LINE_8;
+
+    // check that contours of fillPoly and polylines match
+    {
+        cv::Mat img(imgSize, imgSize, type);
+        img = 0;
+        std::vector<std::vector<cv::Point>> polygonPoints{
+            { {44, 27}, {7, 37}, {7, 19}, {38, 19} }
+        };
+        cv::fillPoly(img, polygonPoints, cl, lineType, shift);
+        cv::polylines(img, polygonPoints, true, 0, 1, lineType, shift);
+
+        {
+            cv::Mat labelImage(img.size(), CV_32S);
+            int labels = cv::connectedComponents(img, labelImage, 4);
+            EXPECT_EQ(2, labels) << "filling went over the border";
+        }
+    }
+
+    // check that line generated with fillPoly and polylines match
+    {
+        cv::Mat img1(imgSize, imgSize, type), img2(imgSize, imgSize, type);
+        img1 = 0;
+        img2 = 0;
+        std::vector<std::vector<cv::Point>> polygonPoints{
+            { {44, 27}, {38, 19} }
+        };
+        cv::fillPoly(img1, polygonPoints, cl, lineType, shift);
+        cv::polylines(img2, polygonPoints, true, cl, 1, lineType, shift);
+        EXPECT_MAT_N_DIFF(img1, img2, 0);
+    }
+}
+
+TEST(Drawing, fillpoly_match_lines)
+{
+    const int imgSize = 49;
+    const int type = CV_8UC1;
+    const int shift = 0;
+    const Scalar cl = Scalar::all(255);
+    const cv::LineTypes lineType = LINE_8;
+    cv::Mat img1(imgSize, imgSize, type), img2(imgSize, imgSize, type);
+    for (int x1 = 0; x1 < imgSize; x1 += imgSize / 2)
+    {
+        for (int y1 = 0; y1 < imgSize; y1 += imgSize / 2)
+        {
+            for (int x2 = 0; x2 < imgSize; x2++)
+            {
+                for (int y2 = 0; y2 < imgSize; y2++)
+                {
+                    img1 = 0;
+                    img2 = 0;
+                    std::vector<std::vector<cv::Point>> polygonPoints{
+                        { {x1, y1}, {x2, y2} }
+                    };
+                    cv::fillPoly(img1, polygonPoints, cl, lineType, shift);
+                    cv::polylines(img2, polygonPoints, true, cl, 1, lineType, shift);
+                    EXPECT_MAT_N_DIFF(img1, img2, 0);
+                }
+            }
+        }
+    }
+}
+
 TEST(Drawing, fillpoly_fully)
 {
     unsigned imageWidth = 256;
@@ -720,7 +789,7 @@ TEST(Drawing, fillpoly_fully)
         cv::Mat labelImage(binary.size(), CV_32S);
         cv::Mat labelCentroids;
         int labels = cv::connectedComponents(binary, labelImage, 4);
-        EXPECT_EQ(2, labels) << "artifacts occured";
+        EXPECT_EQ(2, labels) << "artifacts occurred";
     }
 
     // check if filling went over border
@@ -809,7 +878,7 @@ PARAM_TEST_CASE(FillPolyFully, unsigned, unsigned, int, int, Point, cv::LineType
         cv::Mat labelImage(binary.size(), CV_32S);
         cv::Mat labelCentroids;
         int labels = cv::connectedComponents(binary, labelImage, 4);
-        EXPECT_EQ(2, labels) << "artifacts occured";
+        EXPECT_EQ(2, labels) << "artifacts occurred";
     }
 
     void check_filling_over_border(cv::Mat& img, const std::vector<cv::Point>& polygonPoints)
@@ -1033,6 +1102,30 @@ TEST(Drawing, contours_filled)
             drawContours(res, contours, idx + 1, white, -1, cv::LINE_4, hierarchy);
         EXPECT_LT(cvtest::norm(imgi, res, NORM_INF), 1);
     }
+}
+
+// Test for LINE_4 vs LINE_8 connectivity behavior
+// Regression test for issue #26413
+TEST(Drawing, line_connectivity_regression_26413)
+{
+    Mat img4(10, 10, CV_8UC1, Scalar(0));
+    Mat img8(10, 10, CV_8UC1, Scalar(0));
+
+    // Draw a diagonal line from (0,0) to (9,9)
+    // LINE_4 (4-connected) should produce staircase pattern (no diagonals)
+    // LINE_8 (8-connected) should produce diagonal steps
+    line(img4, Point(0, 0), Point(9, 9), Scalar(255), 1, LINE_4);
+    line(img8, Point(0, 0), Point(9, 9), Scalar(255), 1, LINE_8);
+
+    int count4 = countNonZero(img4);
+    int count8 = countNonZero(img8);
+
+    // LINE_8 for a 10-pixel diagonal should have exactly 10 pixels
+    EXPECT_EQ(10, count8) << "LINE_8 diagonal from (0,0) to (9,9) should have 10 pixels";
+
+    // LINE_4 for a 10-pixel diagonal should have approximately 19 pixels
+    // (needs both horizontal and vertical steps)
+    EXPECT_GT(count4, 15) << "LINE_4 diagonal should have significantly more pixels due to staircase";
 }
 
 }} // namespace

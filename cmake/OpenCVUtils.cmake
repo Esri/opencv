@@ -309,7 +309,11 @@ function(ocv_include_directories)
            dir MATCHES "/usr/include$")
       # workaround for GCC 6.x bug
     else()
-      include_directories(AFTER SYSTEM "${dir}")
+      if(${CMAKE_SYSTEM_NAME} MATCHES QNX)
+        include_directories(AFTER "${dir}")
+      else()
+        include_directories(AFTER SYSTEM "${dir}")
+      endif()
     endif()
   endforeach()
   include_directories(BEFORE ${__add_before})
@@ -349,23 +353,23 @@ function(ocv_target_include_directories target)
   #ocv_debug_message("ocv_target_include_directories(${target} ${ARGN})")
   _ocv_fix_target(target)
   set(__params "")
-  if(CV_GCC AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "6.0" AND
-      ";${ARGN};" MATCHES "/usr/include;")
-    return() # workaround for GCC 6.x bug
-  endif()
-  set(__params "")
   set(__system_params "")
   set(__var_name __params)
   foreach(dir ${ARGN})
     if("${dir}" STREQUAL "SYSTEM")
       set(__var_name __system_params)
     else()
-      get_filename_component(__abs_dir "${dir}" ABSOLUTE)
-      ocv_is_opencv_directory(__is_opencv_dir "${dir}")
-      if(__is_opencv_dir)
-        list(APPEND ${__var_name} "${__abs_dir}")
+      if(CV_GCC AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "6.0" AND
+          dir MATCHES "/usr/include$")
+         # workaround for GCC 6.x bug
       else()
-        list(APPEND ${__var_name} "${dir}")
+        get_filename_component(__abs_dir "${dir}" ABSOLUTE)
+        ocv_is_opencv_directory(__is_opencv_dir "${dir}")
+        if(__is_opencv_dir)
+          list(APPEND ${__var_name} "${__abs_dir}")
+        else()
+          list(APPEND ${__var_name} "${dir}")
+        endif()
       endif()
     endif()
   endforeach()
@@ -1663,7 +1667,7 @@ function(ocv_install_used_external_targets)
   if(NOT BUILD_SHARED_LIBS
       AND NOT (CMAKE_VERSION VERSION_LESS "3.13.0")  # upgrade CMake: https://gitlab.kitware.com/cmake/cmake/-/merge_requests/2152
   )
-    foreach(tgt in ${ARGN})
+    foreach(tgt IN LISTS ARGN)
       if(tgt MATCHES "^ocv\.3rdparty\.")
         list(FIND __OPENCV_EXPORTED_EXTERNAL_TARGETS "${tgt}" _found)
         if(_found EQUAL -1)  # don't export target twice
@@ -1992,7 +1996,7 @@ macro(ocv_git_describe var_name path)
       OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     if(NOT GIT_RESULT EQUAL 0)
-      execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --always --dirty --match "[0-9].[0-9].[0-9]*" --exclude "[^-]*-cvsdk"
+      execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --always --dirty --match "[0-9].[0-9]*.[0-9]*" --exclude "[^-]*-cvsdk"
         WORKING_DIRECTORY "${path}"
         OUTPUT_VARIABLE ${var_name}
         RESULT_VARIABLE GIT_RESULT

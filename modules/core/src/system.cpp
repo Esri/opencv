@@ -43,8 +43,18 @@
 
 #include "precomp.hpp"
 #include <atomic>
+#include <exception>
 #include <iostream>
 #include <ostream>
+
+#ifdef __QNX__
+    #include <unistd.h>
+    #include <sys/neutrino.h>
+    #include <sys/syspage.h>
+#ifdef __aarch64__
+    #include <aarch64/syspage.h>
+#endif
+#endif
 
 #include <opencv2/core/utils/configuration.private.hpp>
 #include <opencv2/core/utils/trace.private.hpp>
@@ -116,7 +126,6 @@ void* allocSingletonNewBuffer(size_t size) { return malloc(size); }
 #endif
 
 #ifdef CV_ERROR_SET_TERMINATE_HANDLER
-#include <exception>      // std::set_terminate
 #include <cstdlib>        // std::abort
 #endif
 
@@ -142,7 +151,7 @@ const uint64_t AT_HWCAP = NT_GNU_HWCAP;
 #endif
 
 
-#if (defined __ppc64__ || defined __PPC64__) && defined __unix__
+#if ((defined __ppc64__ || defined __PPC64__) && (defined HAVE_GETAUXVAL || defined HAVE_ELF_AUX_INFO))
 # include "sys/auxv.h"
 # ifndef AT_HWCAP2
 #   define AT_HWCAP2 26
@@ -169,6 +178,7 @@ const uint64_t AT_HWCAP = NT_GNU_HWCAP;
   #define _WIN32_WINNT 0x0400  // http://msdn.microsoft.com/en-us/library/ms686857(VS.85).aspx
 #endif
 #include <windows.h>
+#include <combaseapi.h>
 #if (_WIN32_WINNT >= 0x0602)
   #include <synchapi.h>
 #endif
@@ -318,12 +328,12 @@ Exception::Exception(int _code, const String& _err, const String& _func, const S
     formatMessage();
 }
 
-Exception::~Exception() throw() {}
+Exception::~Exception() CV_NOEXCEPT {}
 
 /*!
  \return the error description and the context as a text string.
  */
-const char* Exception::what() const throw() { return msg.c_str(); }
+const char* Exception::what() const CV_NOEXCEPT { return msg.c_str(); }
 
 void Exception::formatMessage()
 {
@@ -418,6 +428,7 @@ struct HWFeatures
         g_hwFeatureNames[CPU_NEON_DOTPROD] = "NEON_DOTPROD";
         g_hwFeatureNames[CPU_NEON_FP16] = "NEON_FP16";
         g_hwFeatureNames[CPU_NEON_BF16] = "NEON_BF16";
+        g_hwFeatureNames[CPU_SVE] = "SVE";
 
         g_hwFeatureNames[CPU_VSX] = "VSX";
         g_hwFeatureNames[CPU_VSX3] = "VSX3";
@@ -441,13 +452,11 @@ struct HWFeatures
 
     void initialize(void)
     {
-#ifndef NO_GETENV
-        if (getenv("OPENCV_DUMP_CONFIG"))
+        if (utils::getConfigurationParameterBool("OPENCV_DUMP_CONFIG"))
         {
             fprintf(stderr, "\nOpenCV build configuration is:\n%s\n",
                 cv::getBuildInformation().c_str());
         }
-#endif
 
         initializeNames();
 
@@ -582,6 +591,7 @@ struct HWFeatures
                 {
                     have[CV_CPU_NEON_DOTPROD] = (auxv.a_un.a_val & (1 << 20)) != 0; // HWCAP_ASIMDDP
                     have[CV_CPU_NEON_FP16] = (auxv.a_un.a_val & (1 << 10)) != 0; // HWCAP_ASIMDHP
+                    have[CV_CPU_SVE] = (auxv.a_un.a_val & (1 << 22)) != 0; // HWCAP_SVE
                 }
 #if defined(AT_HWCAP2)
                 else if (auxv.a_type == AT_HWCAP2)
@@ -669,7 +679,7 @@ struct HWFeatures
     #if defined _ARM_ && (defined(_WIN32_WCE) && _WIN32_WCE >= 0x800)
         have[CV_CPU_NEON] = true;
     #endif
-    #if defined _M_ARM64
+    #if defined _M_ARM64 || defined _M_ARM64EC
         have[CV_CPU_NEON] = true;
     #endif
     #ifdef __riscv_vector
@@ -679,7 +689,7 @@ struct HWFeatures
         have[CV_CPU_MSA] = true;
     #endif
 
-    #if (defined __ppc64__ || defined __PPC64__) && defined __linux__
+    #if (defined __ppc64__ || defined __PPC64__) && defined HAVE_GETAUXVAL
         unsigned int hwcap = getauxval(AT_HWCAP);
         if (hwcap & PPC_FEATURE_HAS_VSX) {
             hwcap = getauxval(AT_HWCAP2);
@@ -689,7 +699,7 @@ struct HWFeatures
                 have[CV_CPU_VSX] = (hwcap & PPC_FEATURE2_ARCH_2_07) != 0;
             }
         }
-    #elif (defined __ppc64__ || defined __PPC64__) && defined __FreeBSD__
+    #elif (defined __ppc64__ || defined __PPC64__) && defined HAVE_ELF_AUX_INFO
         unsigned long hwcap = 0;
         elf_aux_info(AT_HWCAP, &hwcap, sizeof(hwcap));
         if (hwcap & PPC_FEATURE_HAS_VSX) {
@@ -701,7 +711,7 @@ struct HWFeatures
             }
         }
     #else
-        // TODO: AIX, OpenBSD
+        // TODO: AIX
         #if CV_VSX || defined _ARCH_PWR8 || defined __POWER9_VECTOR__
             have[CV_CPU_VSX] = true;
         #endif
@@ -722,12 +732,10 @@ struct HWFeatures
     #endif
 
         bool skip_baseline_check = false;
-#ifndef NO_GETENV
-        if (getenv("OPENCV_SKIP_CPU_BASELINE_CHECK"))
+        if (utils::getConfigurationParameterBool("OPENCV_SKIP_CPU_BASELINE_CHECK"))
         {
             skip_baseline_check = true;
         }
-#endif
         int baseline_features[] = { CV_CPU_BASELINE_FEATURES };
         if (!checkFeatures(baseline_features, sizeof(baseline_features) / sizeof(baseline_features[0]))
             && !skip_baseline_check)
@@ -777,15 +785,10 @@ struct HWFeatures
     void readSettings(const int* baseline_features, int baseline_count)
     {
         bool dump = true;
-        const char* disabled_features =
-#ifdef NO_GETENV
-                NULL;
-#else
-                getenv("OPENCV_CPU_DISABLE");
-#endif
-        if (disabled_features && disabled_features[0] != 0)
+        std::string disabled_features = utils::getConfigurationParameterString("OPENCV_CPU_DISABLE");
+        if (!disabled_features.empty())
         {
-            const char* start = disabled_features;
+            const char* start = disabled_features.c_str();
             for (;;)
             {
                 while (start[0] != 0 && isSymbolSeparator(start[0]))
@@ -1071,20 +1074,19 @@ String tempfile( const char* suffix )
 {
 #if OPENCV_HAVE_FILESYSTEM_SUPPORT
     String fname;
-#ifndef NO_GETENV
-    const char *temp_dir = getenv("OPENCV_TEMP_PATH");
-#endif
+
+    std::string temp_dir = utils::getConfigurationParameterString("OPENCV_TEMP_PATH");
 
 #if defined _WIN32
 #ifdef WINRT
     RoInitialize(RO_INIT_MULTITHREADED);
-    std::wstring temp_dir = GetTempPathWinRT();
+    std::wstring temp_dir_rt = GetTempPathWinRT();
 
     std::wstring temp_file = GetTempFileNameWinRT(L"ocv");
     if (temp_file.empty())
         return String();
 
-    temp_file = temp_dir.append(std::wstring(L"\\")).append(temp_file);
+    temp_file = temp_dir_rt.append(std::wstring(L"\\")).append(temp_file);
     DeleteFileW(temp_file.c_str());
 
     char aname[MAX_PATH];
@@ -1094,12 +1096,12 @@ String tempfile( const char* suffix )
     RoUninitialize();
 #elif defined(_WIN32_WCE)
     const auto kMaxPathSize = MAX_PATH+1;
-    wchar_t temp_dir[kMaxPathSize] = {0};
+    wchar_t temp_dir_ce[kMaxPathSize] = {0};
     wchar_t temp_file[kMaxPathSize] = {0};
 
-    ::GetTempPathW(kMaxPathSize, temp_dir);
+    ::GetTempPathW(kMaxPathSize, temp_dir_ce);
 
-    if(0 != ::GetTempFileNameW(temp_dir, L"ocv", 0, temp_file)) {
+    if(0 != ::GetTempFileNameW(temp_dir_ce, L"ocv", 0, temp_file)) {
         DeleteFileW(temp_file);
         char aname[MAX_PATH];
         size_t copied = wcstombs(aname, temp_file, MAX_PATH);
@@ -1107,20 +1109,31 @@ String tempfile( const char* suffix )
         fname = String(aname);
     }
 #else
+    // Use GUID-based naming to avoid race condition with GetTempFileNameA
+    // See issue #19648
     char temp_dir2[MAX_PATH] = { 0 };
-    char temp_file[MAX_PATH] = { 0 };
 
-    if (temp_dir == 0 || temp_dir[0] == 0)
+    if (temp_dir.empty())
     {
         ::GetTempPathA(sizeof(temp_dir2), temp_dir2);
-        temp_dir = temp_dir2;
+        temp_dir = std::string(temp_dir2);
     }
-    if(0 == ::GetTempFileNameA(temp_dir, "ocv", 0, temp_file))
+
+    GUID g;
+    HRESULT hr = CoCreateGuid(&g);
+    if (FAILED(hr))
         return String();
+    char guidStr[40];
+    const char* mask = "%08x_%04x_%04x_%02x%02x_%02x%02x%02x%02x%02x%02x";
+    snprintf(guidStr, sizeof(guidStr), mask,
+            g.Data1, g.Data2, g.Data3, (unsigned int)g.Data4[0], (unsigned int)g.Data4[1],
+            (unsigned int)g.Data4[2], (unsigned int)g.Data4[3], (unsigned int)g.Data4[4],
+            (unsigned int)g.Data4[5], (unsigned int)g.Data4[6], (unsigned int)g.Data4[7]);
 
-    DeleteFileA(temp_file);
-
-    fname = temp_file;
+    fname = temp_dir;
+    if (!fname.empty() && fname[fname.size()-1] != '\\' && fname[fname.size()-1] != '/')
+        fname += "\\";
+    fname = fname + "ocv" + guidStr;
 #endif
 # else
 #  ifdef __ANDROID__
@@ -1130,7 +1143,7 @@ String tempfile( const char* suffix )
     char defaultTemplate[] = "/tmp/__opencv_temp.XXXXXX";
 #  endif
 
-    if (temp_dir == 0 || temp_dir[0] == 0)
+    if (temp_dir.empty())
         fname = defaultTemplate;
     else
     {
@@ -1314,6 +1327,12 @@ redirectError( ErrorCallback errCallback, void* userdata, void** prevUserdata)
     customErrorCallbackData = userdata;
 
     return prevCallback;
+}
+
+void terminate(int _code, const String& _err, const char* _func, const char* _file, int _line) CV_NOEXCEPT
+{
+    dumpException(cv::Exception(_code, _err, _func, _file, _line));
+    std::terminate();
 }
 
 }
@@ -2274,9 +2293,9 @@ size_t utils::getConfigurationParameterSizeT(const char* name, size_t defaultVal
     return read<size_t>(name, defaultValue);
 }
 
-cv::String utils::getConfigurationParameterString(const char* name, const char* defaultValue)
+std::string utils::getConfigurationParameterString(const char* name, const std::string & defaultValue)
 {
-    return read<cv::String>(name, defaultValue ? cv::String(defaultValue) : cv::String());
+    return read<cv::String>(name, defaultValue);
 }
 
 utils::Paths utils::getConfigurationParameterPaths(const char* name, const utils::Paths &defaultValue)
@@ -2573,11 +2592,8 @@ public:
         }
         ippFeatures = cpuFeatures;
 
-        const char* pIppEnv = getenv("OPENCV_IPP");
-        cv::String env;
-        if(pIppEnv != NULL)
-            env = pIppEnv;
-        if(env.size())
+        std::string env = utils::getConfigurationParameterString("OPENCV_IPP");
+        if(!env.empty())
         {
 #if IPP_VERSION_X100 >= 201900
             const Ipp64u minorFeatures = ippCPUID_MOVBE|ippCPUID_AES|ippCPUID_CLMUL|ippCPUID_ABR|ippCPUID_RDRAND|ippCPUID_F16C|
@@ -2882,6 +2898,14 @@ bool restoreFPDenormalsState(const FPDenormalsModeState& state)
 
 }  // namespace details
 
+AlgorithmHint getDefaultAlgorithmHint()
+{
+#ifdef OPENCV_ALGO_HINT_DEFAULT
+    return OPENCV_ALGO_HINT_DEFAULT;
+#else
+    return ALGO_HINT_ACCURATE;
+#endif
+};
 
 } // namespace cv
 

@@ -78,7 +78,16 @@ const FourCC_Ext_Size entries[] =
     make_tuple("FFV1", "mkv", bigSize)
 };
 
-INSTANTIATE_TEST_CASE_P(videoio, videoio_ffmpeg, testing::ValuesIn(entries));
+inline static std::string videoio_ffmpeg_name_printer(const testing::TestParamInfo<videoio_ffmpeg::ParamType>& info)
+{
+    std::ostringstream os;
+    const string & fourcc = get<0>(info.param);
+    const Size sz = get<2>(info.param);
+    os << (fourcc.size() == 0 ? "NONE" : fourcc) << "_" << get<1>(info.param) << "_" << sz.height << "p";
+    return os.str();
+}
+
+INSTANTIATE_TEST_CASE_P(videoio, videoio_ffmpeg, testing::ValuesIn(entries), videoio_ffmpeg_name_printer);
 
 //==========================================================================
 
@@ -143,9 +152,19 @@ const videoio_read_params_t videoio_read_params[] =
     //videoio_read_params_t("video/big_buck_bunny.wmv", 125, true),
 };
 
+inline static std::string videoio_read_name_printer(const testing::TestParamInfo<videoio_read::ParamType>& info)
+{
+    std::ostringstream out;
+    out << getExtensionSafe(get<0>(get<0>(info.param))) << "_"
+        << get<1>(info.param) << "_"
+        << (get<2>(info.param) ? "RAW" : "ENC");
+    return out.str();
+}
+
 INSTANTIATE_TEST_CASE_P(/**/, videoio_read, testing::Combine(testing::ValuesIn(videoio_read_params),
                                                              testing::Values(0, 1, 2, 50),
-                                                             testing::Values(true, false)));
+                                                             testing::Values(true, false)),
+                        videoio_read_name_printer);
 
 //==========================================================================
 
@@ -293,7 +312,7 @@ const videoio_container_get_params_t videoio_container_get_params[] =
 
 INSTANTIATE_TEST_CASE_P(/**/, videoio_container_get, testing::ValuesIn(videoio_container_get_params));
 
-typedef tuple<string, string, int, int> videoio_encapsulate_params_t;
+typedef tuple<string, string, int, int, bool, bool> videoio_encapsulate_params_t;
 typedef testing::TestWithParam< videoio_encapsulate_params_t > videoio_encapsulate;
 
 TEST_P(videoio_encapsulate, write)
@@ -307,6 +326,8 @@ TEST_P(videoio_encapsulate, write)
     const int idrPeriod = get<2>(GetParam());
     const int nFrames = get<3>(GetParam());
     const string fileNameOut = tempfile(cv::format("test_encapsulated_stream.%s", ext.c_str()).c_str());
+    const bool setPts = get<4>(GetParam());
+    const bool tsWorking = get<5>(GetParam());
 
     // Use VideoWriter to encapsulate encoded video read with VideoReader
     {
@@ -320,12 +341,15 @@ TEST_P(videoio_encapsulate, write)
         capRaw.retrieve(extraData, codecExtradataIndex);
         const int fourcc = static_cast<int>(capRaw.get(CAP_PROP_FOURCC));
         const bool mpeg4 = (fourcc == fourccFromString("FMP4"));
-
         VideoWriter container(fileNameOut, api, fourcc, fps, { width, height }, { VideoWriterProperties::VIDEOWRITER_PROP_RAW_VIDEO, 1, VideoWriterProperties::VIDEOWRITER_PROP_KEY_INTERVAL, idrPeriod });
         ASSERT_TRUE(container.isOpened());
         Mat rawFrame;
         for (int i = 0; i < nFrames; i++) {
             ASSERT_TRUE(capRaw.read(rawFrame));
+            if (setPts && i == 0) {
+                double dts = capRaw.get(CAP_PROP_DTS_DELAY);
+                ASSERT_TRUE(container.set(VIDEOWRITER_PROP_DTS_DELAY, dts)) << "dts=" << dts;
+            }
             ASSERT_FALSE(rawFrame.empty());
             if (i == 0 && mpeg4) {
                 Mat tmp = rawFrame.clone();
@@ -335,6 +359,10 @@ TEST_P(videoio_encapsulate, write)
                 rawFrame = Mat(1, newSz, CV_8UC1);
                 memcpy(rawFrame.data, extraData.data, extraData.total());
                 memcpy(rawFrame.data + extraData.total(), tmp.data, tmp.total());
+            }
+            if (setPts) {
+                double pts = capRaw.get(CAP_PROP_PTS);
+                ASSERT_TRUE(container.set(VIDEOWRITER_PROP_PTS, pts)) << "pts=" << pts;
             }
             container.write(rawFrame);
         }
@@ -362,11 +390,13 @@ TEST_P(videoio_encapsulate, write)
             ASSERT_TRUE(capActual.read(actual));
             ASSERT_FALSE(actual.empty());
             ASSERT_EQ(0, cvtest::norm(reference, actual, NORM_INF));
-
             ASSERT_TRUE(capActualRaw.grab());
             const bool keyFrameActual = capActualRaw.get(CAP_PROP_LRF_HAS_KEY_FRAME) == 1.;
             const bool keyFrameReference = idrPeriod ? i % idrPeriod == 0 : 1;
             ASSERT_EQ(keyFrameReference, keyFrameActual);
+            if (tsWorking) {
+                ASSERT_EQ(round(capReference.get(CAP_PROP_POS_MSEC)), round(capActual.get(CAP_PROP_POS_MSEC)));
+            }
         }
     }
 
@@ -375,30 +405,29 @@ TEST_P(videoio_encapsulate, write)
 
 const videoio_encapsulate_params_t videoio_encapsulate_params[] =
 {
-    videoio_encapsulate_params_t("video/big_buck_bunny.h264", "avi", 125, 125),
-    videoio_encapsulate_params_t("video/big_buck_bunny.h265", "mp4", 125, 125),
-    videoio_encapsulate_params_t("video/big_buck_bunny.wmv", "wmv", 12, 13),
-    videoio_encapsulate_params_t("video/big_buck_bunny.mp4", "mp4", 12, 13),
-    videoio_encapsulate_params_t("video/big_buck_bunny.mjpg.avi", "mp4", 0, 4),
-    videoio_encapsulate_params_t("video/big_buck_bunny.mov", "mp4", 12, 13),
-    videoio_encapsulate_params_t("video/big_buck_bunny.avi", "mp4", 125, 125),
-    videoio_encapsulate_params_t("video/big_buck_bunny.mpg", "mp4", 12, 13),
-    videoio_encapsulate_params_t("video/VID00003-20100701-2204.wmv", "wmv", 12, 13),
-    videoio_encapsulate_params_t("video/VID00003-20100701-2204.mpg", "mp4", 12,13),
-    videoio_encapsulate_params_t("video/VID00003-20100701-2204.avi", "mp4", 12, 13),
-    videoio_encapsulate_params_t("video/VID00003-20100701-2204.3GP", "mp4", 51, 52),
-    videoio_encapsulate_params_t("video/sample_sorenson.avi", "mp4", 12, 13),
-    videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.libxvid.mp4", "mp4", 3, 4),
-    videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.mpeg2video.mp4", "mp4", 12, 13),
-    videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.mjpeg.mp4", "mp4", 0, 5),
-    videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.libx264.mp4", "avi", 15, 15),
-    videoio_encapsulate_params_t("../cv/tracking/faceocc2/data/faceocc2.webm", "webm", 128, 129),
-    videoio_encapsulate_params_t("../cv/video/1920x1080.avi", "mp4", 12, 13),
-    videoio_encapsulate_params_t("../cv/video/768x576.avi", "avi", 15, 16)
+    videoio_encapsulate_params_t("video/big_buck_bunny.h264", "avi", 125, 125, false, false), // tsWorking = false: no timestamp information
+    videoio_encapsulate_params_t("video/big_buck_bunny.h265", "mp4", 125, 125, false, false), // tsWorking = false: no timestamp information
+    videoio_encapsulate_params_t("video/big_buck_bunny.wmv", "wmv", 12, 13, false, true),
+    videoio_encapsulate_params_t("video/big_buck_bunny.mp4", "mp4", 12, 13, false, true),
+    videoio_encapsulate_params_t("video/big_buck_bunny.mjpg.avi", "mp4", 0, 4, false, true),
+    videoio_encapsulate_params_t("video/big_buck_bunny.mov", "mp4", 12, 13, false, true),
+    videoio_encapsulate_params_t("video/big_buck_bunny.avi", "mp4", 125, 125, false, false), // tsWorking = false: PTS not available for all frames
+    videoio_encapsulate_params_t("video/big_buck_bunny.mpg", "mp4", 12, 13, true, true),
+    videoio_encapsulate_params_t("video/VID00003-20100701-2204.wmv", "wmv", 12, 13, false, true),
+    videoio_encapsulate_params_t("video/VID00003-20100701-2204.mpg", "mp4", 12, 13, false, false), // tsWorking = false: PTS not available for all frames
+    videoio_encapsulate_params_t("video/VID00003-20100701-2204.avi", "mp4", 12, 13, false, false), // tsWorking = false: Unable to correctly set PTS when writing
+    videoio_encapsulate_params_t("video/VID00003-20100701-2204.3GP", "mp4", 51, 52, false, false), // tsWorking = false: Source with variable fps
+    videoio_encapsulate_params_t("video/sample_sorenson.avi", "mp4", 12, 13, false, true),
+    videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.libxvid.mp4", "mp4", 3, 4, false, true),
+    videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.mpeg2video.mp4", "mpg", 12, 13, false, true),
+    videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.mjpeg.mp4", "mp4", 0, 5, false, true),
+    videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.libx264.mp4", "ts", 15, 15, true, true),
+    videoio_encapsulate_params_t("../cv/tracking/faceocc2/data/faceocc2.webm", "webm", 128, 129, false, true),
+    videoio_encapsulate_params_t("../cv/video/1920x1080.avi", "mp4", 12, 13, false, true),
+    videoio_encapsulate_params_t("../cv/video/768x576.avi", "avi", 15, 16, false, true),
     // Not supported by with FFmpeg:
-    //videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.libx265.mp4", "mp4", 15, 15),
-    //videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.libvpx-vp9.mp4", "mp4", 15, 15),
-
+    //videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.libx265.mp4", "mp4", 15, 15, true, true),
+    //videoio_encapsulate_params_t("video/sample_322x242_15frames.yuv420p.libvpx-vp9.mp4", "mp4", 15, 15, false, true),
 };
 
 INSTANTIATE_TEST_CASE_P(/**/, videoio_encapsulate, testing::ValuesIn(videoio_encapsulate_params));
@@ -710,7 +739,15 @@ const ffmpeg_get_fourcc_param_t ffmpeg_get_fourcc_param[] =
     ffmpeg_get_fourcc_param_t("video/sample_322x242_15frames.yuv420p.libx264.mp4", "h264")
 };
 
-INSTANTIATE_TEST_CASE_P(videoio, ffmpeg_get_fourcc, testing::ValuesIn(ffmpeg_get_fourcc_param));
+inline static std::string ffmpeg_get_fourcc_name_printer(const testing::TestParamInfo<ffmpeg_get_fourcc::ParamType>& info)
+{
+    std::ostringstream os;
+    const string & fourcc = get<1>(info.param);
+    os << info.index << "_" << (fourcc.size() == 0 ? "NONE" : fourcc);
+    return os.str();
+}
+
+INSTANTIATE_TEST_CASE_P(videoio, ffmpeg_get_fourcc, testing::ValuesIn(ffmpeg_get_fourcc_param), ffmpeg_get_fourcc_name_printer);
 
 static void ffmpeg_check_read_raw(VideoCapture& cap)
 {
@@ -904,6 +941,170 @@ const FourCC_Ext_Color_Support sixteen_bit_modes[] =
 
 };
 
-INSTANTIATE_TEST_CASE_P(/**/, videoio_ffmpeg_16bit, testing::ValuesIn(sixteen_bit_modes));
+inline static std::string videoio_ffmpeg_16bit_name_printer(const testing::TestParamInfo<videoio_ffmpeg_16bit::ParamType>& info)
+{
+    std::ostringstream os;
+    os << get<0>(info.param) << "_"
+        << get<1>(info.param) << "_"
+        << (get<2>(info.param) ? "COLOR" : "GRAY") << "_"
+        << (get<3>(info.param) ? "SUP" : "NOT");
+    return os.str();
+}
+
+INSTANTIATE_TEST_CASE_P(/**/, videoio_ffmpeg_16bit, testing::ValuesIn(sixteen_bit_modes), videoio_ffmpeg_16bit_name_printer);
+
+typedef tuple<int /*inputType*/, int /*Depth*/, bool /*isColor*/, bool /*isValid*/, string /*description*/> ChannelMismatchTestParams;
+typedef testing::TestWithParam< ChannelMismatchTestParams > videoio_ffmpeg_channel_mismatch;
+
+TEST_P(videoio_ffmpeg_channel_mismatch, basic)
+{
+    if (!videoio_registry::hasBackend(CAP_FFMPEG))
+        throw SkipTestException("FFmpeg backend was not found");
+
+    const string filename = "mismatch_video.mp4";
+    int input_type = get<0>(GetParam());
+    int depth = get<1>(GetParam());
+    bool is_Color = get<2>(GetParam());
+    bool is_valid = get<3>(GetParam());
+    const string description = get<4>(GetParam());
+
+    const double fps = 15.0;
+    const int fourcc = VideoWriter::fourcc('m', 'p', '4', 'v');
+    const Mat frame(480, 640, input_type, Scalar::all(0));
+
+    VideoWriter writer(filename, fourcc, fps, frame.size(),
+                                {
+                                    cv::VIDEOWRITER_PROP_DEPTH, depth,
+                                    VIDEOWRITER_PROP_IS_COLOR, is_Color
+                                });
+
+    if (!writer.isOpened())
+        throw SkipTestException("Failed to open video writer");
+
+    for (int i = 1; i <= 15; i++)
+    {
+        // In case of mismatch between input frame channels and
+        // expected depth/isColor configuration a warning  should be printed communicating it
+        writer.write(frame);
+    }
+
+    writer.release();
+
+    VideoCapture cap(filename, CAP_FFMPEG);
+
+    if (is_valid) {
+        ASSERT_TRUE(cap.isOpened()) << "Can't open video for " << description;
+        EXPECT_EQ(cap.get(CAP_PROP_FRAME_COUNT), 15) << "All frames should be written for: " << description;
+    } else {
+        ASSERT_FALSE(cap.isOpened()) << "Video capture should fail to open for: " << description;
+    }
+
+    std::remove(filename.c_str());
+}
+
+const ChannelMismatchTestParams mismatch_cases[] =
+{
+    // Testing input frame channels and expected depth/isColor combinations
+
+    // Open VideoWriter depth/isColor combination: CV_8U/true, everything with 3 channels should be valid
+    make_tuple(CV_16UC1, CV_8U, true, false, "input_CV_16UC1_expected_CV_8U_isColor_true"),
+    make_tuple(CV_8UC1, CV_8U, true, false, "input_CV_8UC1_expected_CV_8U_isColor_true"),
+    make_tuple(CV_8UC3, CV_8U, true, true, "input_CV_8UC3_expected_CV_8U_isColor_true_valid"),
+    make_tuple(CV_16UC3, CV_8U, true, true, "input_CV_16UC3_expected_CV_8U_isColor_true_valid"),
+
+    // Open VideoWriter depth/isColor combination: 16U,8U/false, everything with 1 channel should be valid
+    make_tuple(CV_8UC3, CV_8U, false, false, "input_CV_8UC3_expected_CV_8U_isColor_false"),
+    make_tuple(CV_16UC3, CV_8U, false, false, "input_CV_16UC3_expected_CV_8U_isColor_false"),
+    make_tuple(CV_8UC3, CV_16U, false, false, "input_CV_8UC3_expected_CV_16U_isColor_false"),
+    make_tuple(CV_16UC3, CV_16U, false, false, "input_CV_16UC3_expected_CV_16U_isColor_false"),
+    make_tuple(CV_8UC1, CV_16U, false, true, "input_CV_8UC1_expected_CV_16U_isColor_false_valid"),
+    make_tuple(CV_16UC1, CV_8U, false, true, "input_CV_16UC1_expected_CV_8U_isColor_false_valid"),
+};
+
+inline static std::string videoio_ffmpeg_mismatch_name_printer(const testing::TestParamInfo<videoio_ffmpeg_channel_mismatch::ParamType>& info)
+{
+    std::ostringstream os;
+    os << get<4>(info.param);
+    return os.str();
+}
+
+INSTANTIATE_TEST_CASE_P(/**/, videoio_ffmpeg_channel_mismatch, testing::ValuesIn(mismatch_cases), videoio_ffmpeg_mismatch_name_printer);
+
+// related issue: https://github.com/opencv/opencv/issues/23088
+TEST(ffmpeg_cap_properties, set_pos_get_msec)
+{
+    if (!videoio_registry::hasBackend(CAP_FFMPEG))
+        throw SkipTestException("FFmpeg backend was not found");
+
+    string video_file = findDataFile("video/big_buck_bunny.mp4");
+    VideoCapture cap;
+    EXPECT_NO_THROW(cap.open(video_file, CAP_FFMPEG));
+    ASSERT_TRUE(cap.isOpened()) << "Can't open the video";
+
+    cap.set(CAP_PROP_POS_FRAMES, 25);
+    EXPECT_EQ(cap.get(CAP_PROP_POS_MSEC), 1000.0);
+
+    cap.set(CAP_PROP_POS_MSEC, 525);
+    EXPECT_EQ(cap.get(CAP_PROP_POS_MSEC), 500.0);
+
+    cap.set(CAP_PROP_POS_AVI_RATIO, 0);
+    EXPECT_EQ(cap.get(CAP_PROP_POS_MSEC), 0.0);
+}
+
+// Test that seeking twice to the same frame in videos with negative DTS
+// does not result in negative position or timestamp values
+// related issue: https://github.com/opencv/opencv/issues/27819
+TEST(videoio_ffmpeg, seek_with_negative_dts)
+{
+    if (!videoio_registry::hasBackend(CAP_FFMPEG))
+        throw SkipTestException("FFmpeg backend was not found");
+
+    const std::string filename = findDataFile("video/negdts_h264.mp4");
+    VideoCapture cap(filename, CAP_FFMPEG);
+
+    if (!cap.isOpened())
+        throw SkipTestException("Video stream is not supported");
+
+    // after open, a single grab() should not yield negative POS_MSEC.
+    ASSERT_TRUE(cap.grab());
+    EXPECT_GE(cap.get(CAP_PROP_POS_MSEC), 0.0) << "Negative ts immediately after open+grab()";
+
+    ASSERT_TRUE(cap.set(CAP_PROP_POS_FRAMES, 0));
+    (void)cap.get(CAP_PROP_POS_FRAMES);
+
+    const int framesToProbe[] = {2, 3, 4, 5};
+
+    for (int f : framesToProbe)
+    {
+        // Reset to frame 0
+        ASSERT_TRUE(cap.set(CAP_PROP_POS_FRAMES, 0));
+        cap.get(CAP_PROP_POS_FRAMES);
+
+        // Seek to target frame
+        ASSERT_TRUE(cap.set(CAP_PROP_POS_FRAMES, f));
+        const double posAfterFirstSeek = cap.get(CAP_PROP_POS_FRAMES);
+
+        // Seek to the same frame again
+        ASSERT_TRUE(cap.set(CAP_PROP_POS_FRAMES, f));
+        const double posAfterSecondSeek = cap.get(CAP_PROP_POS_FRAMES);
+        const double tsAfterSecondSeek = cap.get(CAP_PROP_POS_MSEC);
+
+        EXPECT_GE(posAfterSecondSeek, 0)
+            << "Frame index became negative after second seek to frame " << f
+            << " (first seek gave " << posAfterFirstSeek << ")";
+        EXPECT_GE(tsAfterSecondSeek, 0.0)
+            << "Timestamp became negative after second seek to frame " << f;
+
+        // Per-iteration decode check: grab() + ts non-negative
+        ASSERT_TRUE(cap.grab());
+        EXPECT_GE(cap.get(CAP_PROP_POS_MSEC), 0.0) << "Negative timestamp after grab() at frame " << f;
+
+        // Verify that reading a frame works and position advances
+        Mat frame;
+        ASSERT_TRUE(cap.read(frame));
+        ASSERT_FALSE(frame.empty());
+        EXPECT_GE(cap.get(CAP_PROP_POS_FRAMES), f);
+    }
+}
 
 }} // namespace

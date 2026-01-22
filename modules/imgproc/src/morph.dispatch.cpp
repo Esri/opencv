@@ -138,7 +138,7 @@ Mat getStructuringElement(int shape, Size ksize, Point anchor)
     int r = 0, c = 0;
     double inv_r2 = 0;
 
-    CV_Assert( shape == MORPH_RECT || shape == MORPH_CROSS || shape == MORPH_ELLIPSE );
+    CV_Assert( shape == MORPH_RECT || shape == MORPH_CROSS || shape == MORPH_ELLIPSE || shape == MORPH_DIAMOND );
 
     anchor = normalizeAnchor(anchor, ksize);
 
@@ -150,6 +150,11 @@ Mat getStructuringElement(int shape, Size ksize, Point anchor)
         r = ksize.height/2;
         c = ksize.width/2;
         inv_r2 = r ? 1./((double)r*r) : 0;
+    }
+    else if( shape == MORPH_DIAMOND )
+    {
+        r = ksize.height/2;
+        c = ksize.width/2;
     }
 
     Mat elem(ksize, CV_8U);
@@ -163,6 +168,16 @@ Mat getStructuringElement(int shape, Size ksize, Point anchor)
             j2 = ksize.width;
         else if( shape == MORPH_CROSS )
             j1 = anchor.x, j2 = j1 + 1;
+        else if( shape == MORPH_DIAMOND )
+        {
+            int dy = std::abs(i - r);
+            if( dy <= r )
+            {
+                int dx = r - dy;
+                j1 = std::max( c - dx, 0 );
+                j2 = std::min( c + dx + 1, ksize.width );
+            }
+        }
         else
         {
             int dy = i - r;
@@ -197,14 +212,34 @@ static bool halMorph(int op, int src_type, int dst_type,
               int kernel_width, int kernel_height, int anchor_x, int anchor_y,
               int borderType, const double borderValue[4], int iterations, bool isSubmatrix)
 {
+    // Prioritize stateless implementation
+    int res = cv_hal_morph_stateless(op, src_data, src_step, src_type, dst_data, dst_step, dst_type, width, height,
+                                     roi_width, roi_height, roi_x, roi_y, roi_width2, roi_height2, roi_x2, roi_y2,
+                                     kernel_data, kernel_step, kernel_type, kernel_width, kernel_height, anchor_x, anchor_y,
+                                     borderType, borderValue, iterations, isSubmatrix, src_data == dst_data);
+    if (res == CV_HAL_ERROR_OK)
+    {
+        return true;
+    } else if (res != CV_HAL_ERROR_NOT_IMPLEMENTED)
+    {
+        CV_Error_(cv::Error::StsInternal,
+                  ("HAL implementation morph_stateless ==> " CVAUX_STR(cv_hal_morph_stateless) " returned %d (0x%08x)", res, res));
+    }
+
     cvhalFilter2D * ctx;
-    int res = cv_hal_morphInit(&ctx, op, src_type, dst_type, width, height,
+    res = cv_hal_morphInit(&ctx, op, src_type, dst_type, width, height,
                                kernel_type, kernel_data, kernel_step, kernel_width, kernel_height,
                                anchor_x, anchor_y,
                                borderType, borderValue,
                                iterations, isSubmatrix, src_data == dst_data);
-    if (res != CV_HAL_ERROR_OK)
+    if (res == CV_HAL_ERROR_NOT_IMPLEMENTED)
+    {
         return false;
+    } else if (res != CV_HAL_ERROR_OK)
+    {
+        CV_Error_(cv::Error::StsInternal,
+                  ("HAL implementation morphInit ==> " CVAUX_STR(cv_hal_morphInit) " returned %d (0x%08x)", res, res));
+    }
 
     res = cv_hal_morph(ctx, src_data, src_step, dst_data, dst_step, width, height,
                        roi_width, roi_height,
@@ -212,10 +247,19 @@ static bool halMorph(int op, int src_type, int dst_type,
                        roi_width2, roi_height2,
                        roi_x2, roi_y2);
     bool success = (res == CV_HAL_ERROR_OK);
+    if (res != CV_HAL_ERROR_OK && res != CV_HAL_ERROR_NOT_IMPLEMENTED )
+    {
+        CV_Error_(cv::Error::StsInternal,
+                  ("HAL implementation morph ==> " CVAUX_STR(cv_hal_morph) " returned %d (0x%08x)", res, res));
+    }
 
     res = cv_hal_morphFree(ctx);
-    if (res != CV_HAL_ERROR_OK)
-        return false;
+    success &= (res == CV_HAL_ERROR_OK);
+    if (res != CV_HAL_ERROR_OK && res != CV_HAL_ERROR_NOT_IMPLEMENTED )
+    {
+        CV_Error_(cv::Error::StsInternal,
+                  ("HAL implementation morphFree ==> " CVAUX_STR(cv_hal_morphFree) " returned %d (0x%08x)", res, res));
+    }
 
     return success;
 }

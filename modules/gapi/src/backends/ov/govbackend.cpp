@@ -69,6 +69,27 @@ ov::Core cv::gapi::ov::wrap::getCore() {
         ? create_OV_Core_pointer() : create_OV_Core_instance();
 }
 
+static std::string make_default_tensor_name(const ov::Output<const ov::Node>& output) {
+    auto default_name = output.get_node()->get_friendly_name();
+    if (output.get_node()->get_output_size() > 1) {
+        default_name += ':' + std::to_string(output.get_index());
+    }
+    return default_name;
+}
+
+static void ensureNamedTensors(std::shared_ptr<ov::Model> model) {
+    for (auto& input : model->inputs()) {
+        if (input.get_names().empty()) {
+            input.set_names({make_default_tensor_name(input)});
+        }
+    }
+    for (auto& output : model->outputs()) {
+        if (output.get_names().empty()) {
+            output.set_names({make_default_tensor_name(output)});
+        }
+    }
+}
+
 static ov::AnyMap toOV(const ParamDesc::PluginConfigT &config) {
     return {config.begin(), config.end()};
 }
@@ -90,7 +111,7 @@ static ov::element::Type toOV(int depth) {
         case CV_16F: return ov::element::f16;
         default: GAPI_Error("OV Backend: Unsupported data type");
     }
-    return ov::element::undefined;
+    return ov::element::dynamic;
 }
 
 static ov::preprocess::ResizeAlgorithm toOVInterp(int interpolation) {
@@ -126,6 +147,25 @@ static int toCV(const ov::element::Type &type) {
     return -1;
 }
 
+static inline std::pair<double, double> get_CV_type_range(int cv_type) {
+    switch (cv_type) {
+        case CV_8U:
+            return { static_cast<double>(std::numeric_limits<uint8_t>::min()),
+                     static_cast<double>(std::numeric_limits<uint8_t>::max()) };
+        case CV_32S:
+            return { static_cast<double>(std::numeric_limits<int32_t>::min()),
+                     static_cast<double>(std::numeric_limits<int32_t>::max()) };
+        case CV_32F:
+            return { static_cast<double>(std::numeric_limits<float>::lowest()),
+                     static_cast<double>(std::numeric_limits<float>::max()) };
+        case CV_16F:
+            return { -65504.0, 65504.0 };
+        default:
+            GAPI_Error("OV Backend: Unsupported data type");
+    }
+    return {0.0, 0.0};
+}
+
 static void copyFromOV(const ov::Tensor &tensor, cv::Mat &mat) {
     const auto total = mat.total() * mat.channels();
     if (toCV(tensor.get_element_type()) != mat.depth() ||
@@ -145,7 +185,7 @@ static void copyFromOV(const ov::Tensor &tensor, cv::Mat &mat) {
                                        mat.ptr<int>(),
                                        total);
     } else {
-        std::copy_n(reinterpret_cast<uint8_t*>(tensor.data()),
+        std::copy_n(reinterpret_cast<const uint8_t*>(tensor.data()),
                     tensor.get_byte_size(),
                     mat.ptr<uint8_t>());
     }
@@ -235,6 +275,10 @@ struct OVUnit {
             model = cv::gapi::ov::wrap::getCore()
                 .read_model(desc.model_path, desc.bin_path);
             GAPI_Assert(model);
+
+            if (params.ensure_named_tensors) {
+                ensureNamedTensors(model);
+            }
 
             if (params.num_in == 1u && params.input_names.empty()) {
                 params.input_names = { model->inputs().begin()->get_any_name() };
@@ -622,7 +666,7 @@ static void PostOutputs(::ov::InferRequest             &infer_request,
 
     ctx->eptr = std::move(eptr);
     for (auto i : ade::util::iota(ctx->uu.params.num_out)) {
-        // NB: Copy data back only if execution finished sucessfuly
+        // NB: Copy data back only if execution finished successfully
         // and inference only mode is disabled.
         // Otherwise just post outputs to maintain streaming executor contract.
         if (!ctx->eptr && !ctx->getOptions().inference_only) {
@@ -1027,6 +1071,20 @@ public:
             if (explicit_out_tensor_prec) {
                 m_ppp.output(output_name).tensor()
                     .set_element_type(toOV(*explicit_out_tensor_prec));
+
+                if (m_model_info.clamp_outputs) {
+                    #if INF_ENGINE_RELEASE >= 2025020000
+                    auto clamp_range = get_CV_type_range(*explicit_out_tensor_prec);
+                    m_ppp.output(output_name).postprocess()
+                        .clamp(clamp_range.first, clamp_range.second);
+                    #else
+                    static bool warned = false;
+                    if (!warned) {
+                        GAPI_LOG_WARNING(NULL, "cfgClampOutputs is enabled, but not supported in this OpenVINO version. Clamping will be ignored.");
+                        warned = true;
+                    }
+                    #endif // INF_ENGINE_RELEASE >= 2025020000
+                }
             }
         }
     }
@@ -1541,7 +1599,16 @@ cv::gimpl::ov::GOVExecutable::GOVExecutable(const ade::Graph &g,
                                             const cv::GCompileArgs &compileArgs,
                                             const std::vector<ade::NodeHandle> &nodes)
     : m_g(g), m_gm(m_g) {
+    auto workload_arg = cv::gapi::getCompileArg<cv::gapi::wip::ov::WorkloadTypeOVPtr>(compileArgs);
+    if(workload_arg.has_value()) {
+#if INF_ENGINE_RELEASE >= 2024030000
+        m_workload_type = workload_arg.value();
+        m_workload_listener_id = m_workload_type->addListener(std::bind(&GOVExecutable::setWorkloadType, this, std::placeholders::_1));
+#else
+        util::throw_error(std::logic_error("Workload type not supported in this version of OpenVINO, use >= 2024.3.0"));
+#endif
 
+    }
     m_options.inference_only =
         cv::gapi::getCompileArg<cv::gapi::wip::ov::benchmark_mode>(compileArgs).has_value();
     // FIXME: Currently this backend is capable to run a single inference node only.
@@ -1577,6 +1644,25 @@ cv::gimpl::ov::GOVExecutable::GOVExecutable(const ade::Graph &g,
         }
     }
 }
+
+#if INF_ENGINE_RELEASE >= 2024030000
+cv::gimpl::ov::GOVExecutable::~GOVExecutable() {
+    if (m_workload_type)
+        m_workload_type->removeListener(m_workload_listener_id);
+}
+
+void cv::gimpl::ov::GOVExecutable::setWorkloadType(const std::string &type) {
+    if (type == "Default") {
+        compiled.compiled_model.set_property({{"WORKLOAD_TYPE", ::ov::WorkloadType::DEFAULT}});
+    }
+    else if (type == "Efficient") {
+        compiled.compiled_model.set_property({{"WORKLOAD_TYPE", ::ov::WorkloadType::EFFICIENT}});
+    }
+    else {
+        GAPI_LOG_WARNING(NULL, "Unknown value for WORKLOAD_TYPE");
+    }
+}
+#endif
 
 void cv::gimpl::ov::GOVExecutable::run(cv::gimpl::GIslandExecutable::IInput  &in,
                                        cv::gimpl::GIslandExecutable::IOutput &out) {

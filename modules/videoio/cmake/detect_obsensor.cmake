@@ -1,12 +1,7 @@
 # --- obsensor ---
 if(NOT HAVE_OBSENSOR)
-  if(APPLE)
-    # force to use orbbec sdk on mac
-    set(OBSENSOR_USE_ORBBEC_SDK ON)
-  endif()
-
   if(OBSENSOR_USE_ORBBEC_SDK)
-    include(${CMAKE_SOURCE_DIR}/3rdparty/orbbecsdk/orbbecsdk.cmake)
+    include("${OpenCV_SOURCE_DIR}/3rdparty/orbbecsdk/orbbecsdk.cmake")
     download_orbbec_sdk(ORBBEC_SDK_ROOT_DIR)
     message(STATUS "ORBBEC_SDK_ROOT_DIR: ${ORBBEC_SDK_ROOT_DIR}")
     if(ORBBEC_SDK_ROOT_DIR)
@@ -18,8 +13,12 @@ if(NOT HAVE_OBSENSOR)
         set(HAVE_OBSENSOR TRUE)
         set(HAVE_OBSENSOR_ORBBEC_SDK TRUE)
         ocv_add_external_target(obsensor "${OrbbecSDK_INCLUDE_DIRS}" "${OrbbecSDK_LIBRARY}" "HAVE_OBSENSOR;HAVE_OBSENSOR_ORBBEC_SDK")
-        file(COPY ${OrbbecSDK_DLL_FILES} DESTINATION ${CMAKE_BINARY_DIR}/bin)
         file(COPY ${OrbbecSDK_DLL_FILES} DESTINATION ${CMAKE_BINARY_DIR}/lib)
+        if(NOT ORBBEC_SDK_VERSION STREQUAL "1")
+          # OrbbecSDK v2 loads some libraries at runtime.
+          file(COPY ${OrbbecSDK_RUNTIME_RESOURCE_FILES} DESTINATION ${CMAKE_BINARY_DIR}/lib)
+          install(DIRECTORY ${OrbbecSDK_RUNTIME_RESOURCE_FILES} DESTINATION ${OPENCV_LIB_INSTALL_PATH})
+        endif()
         install(FILES ${OrbbecSDK_DLL_FILES} DESTINATION ${OPENCV_LIB_INSTALL_PATH})
         ocv_install_3rdparty_licenses(OrbbecSDK ${OrbbecSDK_DIR}/LICENSE.txt)
       endif()

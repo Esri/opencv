@@ -6,6 +6,18 @@
 #include "opencv2/objdetect/aruco_detector.hpp"
 #include "opencv2/calib3d.hpp"
 
+namespace cv {
+    namespace aruco {
+        bool operator==(const Dictionary& d1, const Dictionary& d2);
+        bool operator==(const Dictionary& d1, const Dictionary& d2) {
+            return d1.markerSize == d2.markerSize
+                && std::equal(d1.bytesList.begin<Vec<uint8_t, 4>>(), d1.bytesList.end<Vec<uint8_t, 4>>(), d2.bytesList.begin<Vec<uint8_t, 4>>())
+                && std::equal(d2.bytesList.begin<Vec<uint8_t, 4>>(), d2.bytesList.end<Vec<uint8_t, 4>>(), d1.bytesList.begin<Vec<uint8_t, 4>>())
+                && d1.maxCorrectionBits == d2.maxCorrectionBits;
+        };
+    }
+}
+
 namespace opencv_test { namespace {
 
 /**
@@ -309,6 +321,358 @@ void CV_ArucoDetectionPerspective::run(int) {
     }
 }
 
+// Helper struct and functions for CV_ArucoDetectionConfidence
+
+// Inverts a square subregion inside selected cells of a marker to simulate a confidence drop
+enum class MarkerRegionToTemper {
+    BORDER, // Only invert cells within the marker border bits
+    INNER,  // Only invert cells in the inner part of the marker (excluding borders)
+    ALL     // Invert any cells
+};
+
+// Define the characteristics of cell inversions
+struct MarkerTemperingConfig {
+    float cellRatioToTemper;                   // [0,1] ratio of the cell to invert
+    int numCellsToTemper;                      // Number of cells to invert
+    MarkerRegionToTemper markerRegionToTemper; // Which cells to invert (BORDER, INNER, ALL)
+};
+
+// Test configs for CV_ArucoDetectionConfidence
+struct ArucoConfidenceTestConfig {
+    MarkerTemperingConfig markerTemperingConfig; // Configuration of cells to invert (percentage, number and markerRegionToTemper)
+    float perspectiveRemoveIgnoredMarginPerCell; // Width of the margin of pixels on each cell not considered for the marker identification
+    int markerBorderBits;                        // Number of bits of the marker border
+    float distortionRatio;                       // Percentage of offset used for perspective distortion, bigger means more distorted
+};
+
+enum class markerRot
+{
+    NONE = 0,
+    ROT_90,
+    ROT_180,
+    ROT_270
+};
+
+struct markerDetectionGT {
+    int id;               // Marker identification
+    double confidence;    // Pixel-based confidence defined as 1 - (inverted area / total area)
+    bool expectDetection; // True if we expect to detect the marker
+};
+
+struct MarkerCreationConfig {
+    int id;               // Marker identification
+    int markerSidePixels; // Marker size (in pixels)
+    markerRot rotation;   // Rotation of the marker in degrees (0, 90, 180, 270)
+};
+
+void rotateMarker(Mat &marker, const markerRot rotation)
+{
+    if(rotation == markerRot::NONE)
+        return;
+
+    if (rotation == markerRot::ROT_90) {
+        cv::transpose(marker, marker);
+        cv::flip(marker, marker, 0);
+    } else if (rotation == markerRot::ROT_180) {
+        cv::flip(marker, marker, -1);
+    } else if (rotation == markerRot::ROT_270) {
+        cv::transpose(marker, marker);
+        cv::flip(marker, marker, 1);
+    }
+}
+
+void distortMarker(Mat &marker, const float distortionRatio)
+{
+
+    if (distortionRatio < FLT_EPSILON)
+        return;
+
+    // apply a distortion (a perspective warp) to simulate a non-ideal capture
+    vector<Point2f> src = { {0, 0},
+                            {static_cast<float>(marker.cols), 0},
+                            {static_cast<float>(marker.cols), static_cast<float>(marker.rows)},
+                            {0, static_cast<float>(marker.rows)} };
+    float offset = marker.cols * distortionRatio; // distortionRatio % offset for distortion
+    vector<Point2f> dst = { {offset, offset},
+                            {marker.cols - offset, 0},
+                            {marker.cols - offset, marker.rows - offset},
+                            {0, marker.rows - offset} };
+    Mat M = getPerspectiveTransform(src, dst);
+    warpPerspective(marker, marker, M, marker.size(), INTER_LINEAR, BORDER_CONSTANT, Scalar(255));
+}
+
+/**
+ * @brief Inverts a square subregion inside selected cells of a marker image to simulate confidence degradation.
+ *
+ * The function computes the marker grid parameters and then applies a bitwise inversion
+ * on a square markerRegionToTemper inside the chosen cells. The number of cells to be inverted is determined by
+ * the parameter 'numCellsToTemper'. The candidate cells can be filtered to only include border cells,
+ * inner cells, or all cells according to the parameter 'markerRegionToTemper'.
+ *
+ * @param marker           The marker image
+ * @param markerSidePixels The total size of the marker in pixels (inner and border).
+ * @param markerId         The id of the marker
+ * @param params           The Aruco detector configuration (provides border bits, margin ratios, etc.).
+ * @param dictionary       The Aruco marker dictionary (used to determine marker grid size).
+ * @param cellTempConfig   Cell tempering config as defined in MarkerTemperingConfig
+ * @return Cell tempering ground truth as defined in markerDetectionGT
+ */
+markerDetectionGT applyTemperingToMarkerCells(cv::Mat &marker,
+                                 const int markerSidePixels,
+                                 const int markerId,
+                                 const aruco::DetectorParameters &params,
+                                 const aruco::Dictionary &dictionary,
+                                 const MarkerTemperingConfig &cellTempConfig)
+{
+
+    // nothing to invert
+    if(cellTempConfig.numCellsToTemper <= 0 || cellTempConfig.cellRatioToTemper <= FLT_EPSILON)
+        return {markerId, 1.0, true};
+
+    // compute the overall grid dimensions.
+    const int markerSizeWithBorders = dictionary.markerSize + 2 * params.markerBorderBits;
+    const int cellSidePixelsSize = markerSidePixels / markerSizeWithBorders;
+
+    // compute the margin within each cell used for identification.
+    const int cellMarginPixels = static_cast<int>(params.perspectiveRemoveIgnoredMarginPerCell * cellSidePixelsSize);
+    const int innerCellSizePixels = cellSidePixelsSize - 2 * cellMarginPixels;
+
+    // determine the size of the square that will be inverted in each cell.
+    // (cellSidePixelsInvert / innerCellSizePixels)^2 should equal cellRatioToTemper.
+    const int cellSidePixelsInvert = min(cellSidePixelsSize, static_cast<int>(innerCellSizePixels * std::sqrt(cellTempConfig.cellRatioToTemper)));
+    const int inversionOffsetPixels = (cellSidePixelsSize - cellSidePixelsInvert) / 2;
+
+    // nothing to invert
+    if(cellSidePixelsInvert <= 0)
+        return {markerId, 1.0, true};
+
+    int cellsTempered = 0;
+    int borderErrors = 0;
+    int innerCellsErrors = 0;
+    // iterate over each cell in the grid.
+    for (int row = 0; row < markerSizeWithBorders; row++) {
+        for (int col = 0; col < markerSizeWithBorders; col++) {
+
+            // decide if this cell falls in the markerRegionToTemper to temper.
+            const bool isBorder = (row < params.markerBorderBits ||
+                                   col < params.markerBorderBits ||
+                                   row >= markerSizeWithBorders - params.markerBorderBits ||
+                                   col >= markerSizeWithBorders - params.markerBorderBits);
+
+            const bool inRegion = (cellTempConfig.markerRegionToTemper == MarkerRegionToTemper::ALL ||
+                        (isBorder && cellTempConfig.markerRegionToTemper == MarkerRegionToTemper::BORDER) ||
+                        (!isBorder && cellTempConfig.markerRegionToTemper == MarkerRegionToTemper::INNER));
+
+            // apply the inversion to simulate tempering.
+            if (inRegion && (cellsTempered < cellTempConfig.numCellsToTemper)) {
+                const int xStart = col * cellSidePixelsSize + inversionOffsetPixels;
+                const int yStart = row * cellSidePixelsSize + inversionOffsetPixels;
+                cv::Rect cellRect(xStart, yStart, cellSidePixelsInvert, cellSidePixelsInvert);
+                cv::Mat cellROI = marker(cellRect);
+                cv::bitwise_not(cellROI, cellROI);
+                ++cellsTempered;
+
+                // cell too tempered, no detection expected
+                if(cellTempConfig.cellRatioToTemper > 0.5f) {
+                    if(isBorder){
+                        ++borderErrors;
+                    } else {
+                        ++innerCellsErrors;
+                    }
+                }
+            }
+
+            if(cellsTempered >= cellTempConfig.numCellsToTemper)
+                break;
+        }
+
+        if(cellsTempered >= cellTempConfig.numCellsToTemper)
+            break;
+    }
+
+    // compute the ground-truth confidence
+    const double invertedArea = cellsTempered * cellSidePixelsInvert * cellSidePixelsInvert;
+    const double totalDetectionArea = markerSizeWithBorders * innerCellSizePixels * markerSizeWithBorders * innerCellSizePixels;
+    const double groundTruthConfidence = std::max(0.0, 1.0 - invertedArea / totalDetectionArea);
+
+    // check if marker is expected to be detected
+    const int maximumErrorsInBorder = static_cast<int>(dictionary.markerSize * dictionary.markerSize * params.maxErroneousBitsInBorderRate);
+    const int maxCorrectionRecalculed = static_cast<int>(dictionary.maxCorrectionBits * params.errorCorrectionRate);
+    const bool expectDetection = static_cast<bool>(borderErrors <= maximumErrorsInBorder && innerCellsErrors <= maxCorrectionRecalculed);
+
+    return {markerId, groundTruthConfidence, expectDetection};
+}
+
+/**
+ * @brief Create an image of a marker with inverted (tempered) regions to simulate detection confidence
+ *
+ * Applies an optional rotation and an optional perspective warp to simulate a distorted marker.
+ * Inverts a square subregion inside selected cells of a marker image to simulate a drop in confidence.
+ * Computes the ground-truth confidence as one minus the ratio of inverted area to the total marker area used for identification.
+ *
+ */
+markerDetectionGT generateTemperedMarkerImage(Mat &marker, const MarkerCreationConfig &markerConfig, const MarkerTemperingConfig &markerTemperingConfig,
+                        const aruco::DetectorParameters &params, const aruco::Dictionary &dictionary, const float distortionRatio = 0.f)
+{
+    // generate the synthetic marker image
+    aruco::generateImageMarker(dictionary, markerConfig.id, markerConfig.markerSidePixels,
+                               marker, params.markerBorderBits);
+
+    // rotate marker if necessary
+    rotateMarker(marker, markerConfig.rotation);
+
+    // temper with cells to simulate detection confidence drops
+    markerDetectionGT groundTruth = applyTemperingToMarkerCells(marker, markerConfig.markerSidePixels, markerConfig.id, params, dictionary, markerTemperingConfig);
+
+    // apply a distortion (a perspective warp) to simulate a non-ideal capture
+    distortMarker(marker, distortionRatio);
+
+    return groundTruth;
+}
+
+
+/**
+ * @brief Copies a marker image into a larger image at the given top-left position.
+ */
+void placeMarker(Mat &img, const Mat &marker, const Point2f &topLeft)
+{
+    Rect roi(Point(static_cast<int>(topLeft.x), static_cast<int>(topLeft.y)), marker.size());
+    marker.copyTo(img(roi));
+}
+
+
+/**
+ * @brief Test the marker confidence computations
+ *
+ * Loops over a set of detector configurations (e.g. expected confidence, distortion, DetectorParameters)
+ * For each configuration, it creates a synthetic image containing four markers arranged in a 2x2 grid.
+ * Each marker is generated with its own configuration (id, size, rotation).
+ * Finally, it runs the detector and checks that each marker is detected and
+ * that its computed confidence is close to the ground truth value.
+ *
+ */
+static void runArucoDetectionConfidence(ArucoAlgParams arucoAlgParam) {
+    aruco::DetectorParameters params;
+    // make sure there are no bits have any detection errors
+    params.maxErroneousBitsInBorderRate = 0.0;
+    params.errorCorrectionRate = 0.0;
+    params.perspectiveRemovePixelPerCell = 8; // esnsure that there is enough resolution to properly handle distortions
+    aruco::ArucoDetector detector(aruco::getPredefinedDictionary(aruco::DICT_6X6_250), params);
+
+    const bool detectInvertedMarker = (arucoAlgParam == ArucoAlgParams::DETECT_INVERTED_MARKER);
+
+    // define several detector configurations to test different settings
+    // {{MarkerTemperingConfig}, perspectiveRemoveIgnoredMarginPerCell, markerBorderBits, distortionRatio}
+    vector<ArucoConfidenceTestConfig> detectorConfigs = {
+        // No margins, No distortion
+        {{0.f,   64, MarkerRegionToTemper::ALL}, 0.0f, 1, 0.f},
+        {{0.01f, 64, MarkerRegionToTemper::ALL}, 0.0f, 1, 0.f},
+        {{0.05f, 100, MarkerRegionToTemper::ALL}, 0.0f, 2, 0.f},
+        {{0.1f,  64, MarkerRegionToTemper::ALL}, 0.0f, 1, 0.f},
+        {{0.15f, 30, MarkerRegionToTemper::ALL}, 0.0f, 1, 0.f},
+        {{0.20f, 55, MarkerRegionToTemper::ALL}, 0.0f, 2, 0.f},
+        // Margins, No distortion
+        {{0.f,   26, MarkerRegionToTemper::BORDER}, 0.05f, 1, 0.f},
+        {{0.01f, 56, MarkerRegionToTemper::BORDER}, 0.05f, 2, 0.f},
+        {{0.05f, 144, MarkerRegionToTemper::ALL}, 0.1f,  3, 0.f},
+        {{0.10f, 49, MarkerRegionToTemper::ALL}, 0.15f, 1, 0.f},
+        // No margins, distortion
+        {{0.f,   36, MarkerRegionToTemper::INNER}, 0.0f, 1, 0.01f},
+        {{0.01f, 36, MarkerRegionToTemper::INNER}, 0.0f, 1, 0.02f},
+        {{0.05f, 12, MarkerRegionToTemper::INNER}, 0.0f, 2, 0.05f},
+        {{0.1f,  64, MarkerRegionToTemper::ALL}, 0.0f, 1, 0.1f},
+        {{0.1f,  81, MarkerRegionToTemper::ALL}, 0.0f, 2, 0.2f},
+        // Margins, distortion
+        {{0.f,   81, MarkerRegionToTemper::ALL}, 0.05f, 2, 0.01f},
+        {{0.01f, 64, MarkerRegionToTemper::ALL}, 0.05f, 1, 0.02f},
+        {{0.05f, 81, MarkerRegionToTemper::ALL}, 0.1f,  2, 0.05f},
+        {{0.1f,  64, MarkerRegionToTemper::ALL}, 0.15f, 1, 0.1f},
+        {{0.1f,  64, MarkerRegionToTemper::ALL}, 0.0f,  1, 0.2f},
+        // no marker detection, too much tempering
+        {{0.9f, 1, MarkerRegionToTemper::ALL}, 0.05f, 2, 0.0f},
+        {{0.9f, 1, MarkerRegionToTemper::BORDER}, 0.05f, 2, 0.0f},
+        {{0.9f, 1, MarkerRegionToTemper::INNER}, 0.05f, 2, 0.0f},
+    };
+
+    // define marker configurations for the 4 markers in each image
+    const int markerSidePixels = 480; // To simplify the cell division, markerSidePixels is a multiple of 8. (6x6 dict + 2 border bits)
+    vector<MarkerCreationConfig> markerCreationConfig = {
+        {0, markerSidePixels, markerRot::ROT_90},     // {id, markerSidePixels, rotation}
+        {1, markerSidePixels, markerRot::ROT_270},
+        {2, markerSidePixels, markerRot::NONE},
+        {3, markerSidePixels, markerRot::ROT_180}
+    };
+
+    // loop over each detector configuration
+    for (size_t cfgIdx = 0; cfgIdx < detectorConfigs.size(); cfgIdx++) {
+        ArucoConfidenceTestConfig detCfg = detectorConfigs[cfgIdx];
+        SCOPED_TRACE(cv::format("detectorConfig=%zu", cfgIdx));
+
+        // update detector parameters
+        params.perspectiveRemoveIgnoredMarginPerCell = detCfg.perspectiveRemoveIgnoredMarginPerCell;
+        params.markerBorderBits = detCfg.markerBorderBits;
+        params.detectInvertedMarker = detectInvertedMarker;
+        detector.setDetectorParameters(params);
+
+        // create a blank image large enough to hold 4 markers in a 2x2 grid
+        const int margin = markerSidePixels / 2;
+        const int imageSize = (markerSidePixels * 2) + margin * 3;
+        Mat img(imageSize, imageSize, CV_8UC1, Scalar(255));
+
+        vector<markerDetectionGT> groundTruths;
+        const aruco::Dictionary &dictionary = detector.getDictionary();
+
+        // place each marker into the image
+        for (int row = 0; row < 2; row++) {
+            for (int col = 0; col < 2; col++) {
+                int index = row * 2 + col;
+                MarkerCreationConfig markerCfg = markerCreationConfig[index];
+                // adjust marker id to be unique for each detector configuration
+                markerCfg.id += static_cast<int>(cfgIdx * markerCreationConfig.size());
+
+                // generate img
+                Mat markerImg;
+                markerDetectionGT gt = generateTemperedMarkerImage(markerImg, markerCfg, detCfg.markerTemperingConfig, params, dictionary, detCfg.distortionRatio);
+                groundTruths.push_back(gt);
+
+                // place marker in the image
+                Point2f topLeft(static_cast<float>(margin + col * (markerSidePixels + margin)),
+                                static_cast<float>(margin + row * (markerSidePixels + margin)));
+                placeMarker(img, markerImg, topLeft);
+            }
+        }
+
+        // if testing inverted markers globally, invert the whole image
+        if (detectInvertedMarker) {
+            bitwise_not(img, img);
+        }
+
+        // run detection.
+        vector<vector<Point2f>> corners, rejected;
+        vector<int> ids;
+        vector<float> markerConfidence;
+        detector.detectMarkersWithConfidence(img, corners, ids, markerConfidence, rejected);
+
+        ASSERT_EQ(ids.size(), corners.size());
+        ASSERT_EQ(ids.size(), markerConfidence.size());
+
+        std::map<int, float> confidenceById;
+        for (size_t i = 0; i < ids.size(); i++) {
+            confidenceById[ids[i]] = markerConfidence[i];
+        }
+
+        // verify that every marker is detected and its confidence is within tolerance
+        for (const auto& currentGT : groundTruths) {
+            const bool detected = confidenceById.find(currentGT.id) != confidenceById.end();
+            EXPECT_EQ(currentGT.expectDetection, detected) << "Marker id: " << currentGT.id;
+
+            if (currentGT.expectDetection && detected) {
+                EXPECT_NEAR(currentGT.confidence, confidenceById[currentGT.id], 0.05)
+                    << "Marker id: " << currentGT.id;
+            }
+        }
+    }
+}
 
 /**
  * @brief Check max and min size in marker detection parameters
@@ -540,6 +904,83 @@ TEST(CV_ArucoBitCorrection, algorithmic) {
     test.safe_run();
 }
 
+TEST(CV_ArucoDetectionConfidence, algorithmic) {
+    runArucoDetectionConfidence(ArucoAlgParams::USE_DEFAULT);
+}
+
+TEST(CV_InvertedArucoDetectionConfidence, algorithmic) {
+    runArucoDetectionConfidence(ArucoAlgParams::DETECT_INVERTED_MARKER);
+}
+
+TEST(CV_InvertedFlagArucoDetectionConfidence, algorithmic) {
+    aruco::DetectorParameters params;
+    params.maxErroneousBitsInBorderRate = 0.0;
+    params.errorCorrectionRate = 0.0;
+    params.perspectiveRemovePixelPerCell = 8;
+    params.detectInvertedMarker = false;
+
+    const aruco::Dictionary dictionary = aruco::getPredefinedDictionary(aruco::DICT_6X6_250);
+
+    // create a blank image large enough to hold 4 markers in a 2x2 grid
+    const int markerSidePixels = 480;
+    const int margin = markerSidePixels / 2;
+    const int imageSize = (markerSidePixels * 2) + margin * 3;
+    Mat img(imageSize, imageSize, CV_8UC1, Scalar(255));
+
+    // place 4 markers into the image
+    for (int row = 0; row < 2; row++) {
+        for (int col = 0; col < 2; col++) {
+            const int id = row * 2 + col;
+            Mat markerImg;
+            aruco::generateImageMarker(dictionary, id, markerSidePixels, markerImg, params.markerBorderBits);
+
+            Point2f topLeft(static_cast<float>(margin + col * (markerSidePixels + margin)),
+                            static_cast<float>(margin + row * (markerSidePixels + margin)));
+            placeMarker(img, markerImg, topLeft);
+        }
+    }
+
+    // run detection with detectInvertedMarker = false (baseline)
+    aruco::ArucoDetector detector(dictionary, params);
+    vector<vector<Point2f>> corners, rejected;
+    vector<int> ids;
+    vector<float> confidenceDefault;
+    detector.detectMarkersWithConfidence(img, corners, ids, confidenceDefault, rejected);
+    ASSERT_EQ(ids.size(), corners.size());
+    ASSERT_EQ(ids.size(), confidenceDefault.size());
+
+    std::map<int, float> confidenceByIdDefault;
+    for (size_t i = 0; i < ids.size(); i++) {
+        confidenceByIdDefault[ids[i]] = confidenceDefault[i];
+    }
+
+    // run detection with detectInvertedMarker = true, without inverting the image
+    params.detectInvertedMarker = true;
+    aruco::ArucoDetector detectorInvertedFlag(dictionary, params);
+    vector<float> confidenceInvertedFlag;
+    detectorInvertedFlag.detectMarkersWithConfidence(img, corners, ids, confidenceInvertedFlag, rejected);
+    ASSERT_EQ(ids.size(), corners.size());
+    ASSERT_EQ(ids.size(), confidenceInvertedFlag.size());
+
+    std::map<int, float> confidenceByIdInvertedFlag;
+    for (size_t i = 0; i < ids.size(); i++) {
+        confidenceByIdInvertedFlag[ids[i]] = confidenceInvertedFlag[i];
+    }
+
+    // detectInvertedMarker should not invert/flip confidence for non-inverted markers.
+    for (int id = 0; id < 4; id++) {
+        ASSERT_NE(confidenceByIdDefault.find(id), confidenceByIdDefault.end()) << "Marker id: " << id;
+        ASSERT_NE(confidenceByIdInvertedFlag.find(id), confidenceByIdInvertedFlag.end()) << "Marker id: " << id;
+
+        const float confDefault = confidenceByIdDefault[id];
+        const float confInvertedFlag = confidenceByIdInvertedFlag[id];
+
+        EXPECT_GT(confDefault, 0.8f) << "Marker id: " << id;
+        EXPECT_GT(confInvertedFlag, 0.8f) << "Marker id: " << id;
+        EXPECT_NEAR(confDefault, confInvertedFlag, 0.2f) << "Marker id: " << id;
+    }
+}
+
 TEST(CV_ArucoDetectMarkers, regression_3192)
 {
     aruco::ArucoDetector detector(aruco::getPredefinedDictionary(aruco::DICT_4X4_50));
@@ -635,6 +1076,189 @@ TEST(CV_ArucoDetectMarkers, regression_contour_24220)
     {
         EXPECT_NEAR(static_cast<float>(goldCorners[j * 2]), markerCorners[0][j].x, 1.f);
         EXPECT_NEAR(static_cast<float>(goldCorners[j * 2 + 1]), markerCorners[0][j].y, 1.f);
+    }
+}
+
+TEST(CV_ArucoDetectMarkers, regression_26922)
+{
+    const auto arucoDict = aruco::getPredefinedDictionary(aruco::DICT_4X4_1000);
+    const aruco::GridBoard gridBoard(Size(19, 10), 1, 0.25, arucoDict);
+
+    const Size imageSize(7200, 3825);
+
+    Mat boardImage;
+    gridBoard.generateImage(imageSize, boardImage, 75, 1);
+
+    const aruco::ArucoDetector detector(arucoDict);
+
+    vector<vector<Point2f>> corners;
+    vector<int> ids;
+    detector.detectMarkers(boardImage, corners, ids);
+
+    EXPECT_EQ(ids.size(), 190ull);
+    EXPECT_TRUE(find(ids.begin(), ids.end(), 76) != ids.end());
+    EXPECT_TRUE(find(ids.begin(), ids.end(), 172) != ids.end());
+
+    float transformMatrixData[9] = {1, -0.2f, 300, 0.4f, 1, -1000, 0, 0, 1};
+    const Mat transformMatrix(Size(3, 3), CV_32FC1, transformMatrixData);
+
+    Mat warpedImage;
+    warpPerspective(boardImage, warpedImage, transformMatrix, imageSize);
+
+    detector.detectMarkers(warpedImage, corners, ids);
+
+    EXPECT_EQ(ids.size(), 133ull);
+    // markers with id 76 and 172 are on border and should not be detected
+    EXPECT_FALSE(find(ids.begin(), ids.end(), 76) != ids.end());
+    EXPECT_FALSE(find(ids.begin(), ids.end(), 172) != ids.end());
+}
+
+TEST(CV_ArucoMultiDict, setGetDictionaries)
+{
+    vector<aruco::Dictionary> dictionaries = {aruco::getPredefinedDictionary(aruco::DICT_4X4_50), aruco::getPredefinedDictionary(aruco::DICT_5X5_100)};
+    aruco::ArucoDetector detector(dictionaries);
+    vector<aruco::Dictionary> dicts = detector.getDictionaries();
+    ASSERT_EQ(dicts.size(), 2ul);
+    EXPECT_EQ(dicts[0].markerSize, 4);
+    EXPECT_EQ(dicts[1].markerSize, 5);
+    dictionaries.clear();
+    dictionaries.push_back(aruco::getPredefinedDictionary(aruco::DICT_6X6_100));
+    dictionaries.push_back(aruco::getPredefinedDictionary(aruco::DICT_7X7_250));
+    dictionaries.push_back(aruco::getPredefinedDictionary(aruco::DICT_APRILTAG_25h9));
+    detector.setDictionaries(dictionaries);
+    dicts = detector.getDictionaries();
+    ASSERT_EQ(dicts.size(), 3ul);
+    EXPECT_EQ(dicts[0].markerSize, 6);
+    EXPECT_EQ(dicts[1].markerSize, 7);
+    EXPECT_EQ(dicts[2].markerSize, 5);
+    auto dict = detector.getDictionary();
+    EXPECT_EQ(dict.markerSize, 6);
+    detector.setDictionary(aruco::getPredefinedDictionary(aruco::DICT_APRILTAG_16h5));
+    dicts = detector.getDictionaries();
+    ASSERT_EQ(dicts.size(), 3ul);
+    EXPECT_EQ(dicts[0].markerSize, 4);
+    EXPECT_EQ(dicts[1].markerSize, 7);
+    EXPECT_EQ(dicts[2].markerSize, 5);
+}
+
+
+TEST(CV_ArucoMultiDict, noDict)
+{
+    aruco::ArucoDetector detector;
+    EXPECT_THROW({
+        detector.setDictionaries({});
+    }, Exception);
+}
+
+
+TEST(CV_ArucoMultiDict, multiMarkerDetection)
+{
+    const int markerSidePixels = 100;
+    const int imageSize = markerSidePixels * 2 + 3 * (markerSidePixels / 2);
+    vector<aruco::Dictionary> usedDictionaries;
+
+    // draw synthetic image
+    Mat img = Mat(imageSize, imageSize, CV_8UC1, Scalar::all(255));
+    for(int y = 0; y < 2; y++) {
+        for(int x = 0; x < 2; x++) {
+            Mat marker;
+            int id = y * 2 + x;
+            int dictId = x * 4 + y * 8;
+            auto dict = aruco::getPredefinedDictionary(dictId);
+            usedDictionaries.push_back(dict);
+            aruco::generateImageMarker(dict, id, markerSidePixels, marker);
+            Point2f firstCorner(markerSidePixels / 2.f + x * (1.5f * markerSidePixels),
+                        markerSidePixels / 2.f + y * (1.5f * markerSidePixels));
+            Mat aux = img(Rect((int)firstCorner.x, (int)firstCorner.y, markerSidePixels, markerSidePixels));
+            marker.copyTo(aux);
+        }
+    }
+    img.convertTo(img, CV_8UC3);
+
+    aruco::ArucoDetector detector(usedDictionaries);
+
+    vector<vector<Point2f> > markerCorners;
+    vector<int> markerIds;
+    vector<vector<Point2f> > rejectedImgPts;
+    vector<int> dictIds;
+    detector.detectMarkersMultiDict(img, markerCorners, markerIds, rejectedImgPts, dictIds);
+    ASSERT_EQ(markerIds.size(), 4u);
+    ASSERT_EQ(dictIds.size(), 4u);
+    for (size_t i = 0; i < dictIds.size(); ++i) {
+        EXPECT_EQ(dictIds[i], (int)i);
+    }
+}
+
+
+TEST(CV_ArucoMultiDict, multiMarkerDoubleDetection)
+{
+    const int markerSidePixels = 100;
+    const int imageWidth = 2 * markerSidePixels + 3 * (markerSidePixels / 2);
+    const int imageHeight = markerSidePixels + 2 * (markerSidePixels / 2);
+    vector<aruco::Dictionary> usedDictionaries = {
+        aruco::getPredefinedDictionary(aruco::DICT_5X5_50),
+        aruco::getPredefinedDictionary(aruco::DICT_5X5_100)
+    };
+
+    // draw synthetic image
+    Mat img = Mat(imageHeight, imageWidth, CV_8UC1, Scalar::all(255));
+    for(int y = 0; y < 2; y++) {
+        Mat marker;
+        int id = 49 + y;
+        auto dict = aruco::getPredefinedDictionary(aruco::DICT_5X5_100);
+        aruco::generateImageMarker(dict, id, markerSidePixels, marker);
+        Point2f firstCorner(markerSidePixels / 2.f + y * (1.5f * markerSidePixels),
+                    markerSidePixels / 2.f);
+        Mat aux = img(Rect((int)firstCorner.x, (int)firstCorner.y, markerSidePixels, markerSidePixels));
+        marker.copyTo(aux);
+    }
+    img.convertTo(img, CV_8UC3);
+
+    aruco::ArucoDetector detector(usedDictionaries);
+
+    vector<vector<Point2f> > markerCorners;
+    vector<int> markerIds;
+    vector<vector<Point2f> > rejectedImgPts;
+    vector<int> dictIds;
+    detector.detectMarkersMultiDict(img, markerCorners, markerIds, rejectedImgPts, dictIds);
+    ASSERT_EQ(markerIds.size(), 3u);
+    ASSERT_EQ(dictIds.size(), 3u);
+    EXPECT_EQ(dictIds[0], 0); // 5X5_50
+    EXPECT_EQ(dictIds[1], 1); // 5X5_100
+    EXPECT_EQ(dictIds[2], 1); // 5X5_100
+}
+
+
+TEST(CV_ArucoMultiDict, serialization)
+{
+    aruco::ArucoDetector detector;
+    {
+        FileStorage fs_out(".json", FileStorage::WRITE + FileStorage::MEMORY);
+        ASSERT_TRUE(fs_out.isOpened());
+        detector.write(fs_out);
+        std::string serialized_string = fs_out.releaseAndGetString();
+        FileStorage test_fs(serialized_string, FileStorage::Mode::READ + FileStorage::MEMORY);
+        ASSERT_TRUE(test_fs.isOpened());
+        aruco::ArucoDetector test_detector;
+        test_detector.read(test_fs.root());
+        // compare default constructor result
+        EXPECT_EQ(aruco::getPredefinedDictionary(aruco::DICT_4X4_50), test_detector.getDictionary());
+    }
+    detector.setDictionaries({aruco::getPredefinedDictionary(aruco::DICT_4X4_50), aruco::getPredefinedDictionary(aruco::DICT_5X5_100)});
+    {
+        FileStorage fs_out(".json", FileStorage::WRITE + FileStorage::MEMORY);
+        ASSERT_TRUE(fs_out.isOpened());
+        detector.write(fs_out);
+        std::string serialized_string = fs_out.releaseAndGetString();
+        FileStorage test_fs(serialized_string, FileStorage::Mode::READ + FileStorage::MEMORY);
+        ASSERT_TRUE(test_fs.isOpened());
+        aruco::ArucoDetector test_detector;
+        test_detector.read(test_fs.root());
+        // check for one additional dictionary
+        auto dicts = test_detector.getDictionaries();
+        ASSERT_EQ(2ul, dicts.size());
+        EXPECT_EQ(aruco::getPredefinedDictionary(aruco::DICT_4X4_50), dicts[0]);
+        EXPECT_EQ(aruco::getPredefinedDictionary(aruco::DICT_5X5_100), dicts[1]);
     }
 }
 
